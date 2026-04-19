@@ -45,6 +45,15 @@ Sieve removes it. A bloated system prompt full of tool schemas and stale turns b
 
 Full methodology and detailed analysis will be published in a forthcoming paper. See [`evaluation/RESULTS_SUMMARY.md`](evaluation/RESULTS_SUMMARY.md) for headline figures.
 
+<p align="center">
+  <img src="docs/figures/token-divergence.svg#gh-dark-mode-only" alt="Token growth over 60 days — Baseline vs Sieve" width="720">
+  <img src="docs/figures/token-divergence-light.svg#gh-light-mode-only" alt="Token growth over 60 days — Baseline vs Sieve" width="720">
+</p>
+
+<p align="center">
+  <img src="docs/figures/hallucination-divergence.svg" alt="Hallucination rate over 60 days" width="720">
+</p>
+
 ## Quick start
 
 ```bash
@@ -54,6 +63,18 @@ sieve start       # proxy listens on http://127.0.0.1:11435
 ```
 
 Point your agent at `http://127.0.0.1:11435` instead of your usual LLM endpoint. That is the whole integration.
+
+### One command
+
+<p align="center"><img src="branding/sieve-demo.gif" alt="Sieve CLI demo" width="720"></p>
+
+### Guided setup
+
+If you prefer to be asked about each option — provider URL, model, port, encryption, store location — use the wizard. At the end it offers to run the benchmark below so you can verify token reduction on your own machine before you wire anything up.
+
+```bash
+sieve init --wizard
+```
 
 Full walkthrough: [Getting started](https://llmsieve.dev/getting-started/).
 
@@ -94,6 +115,23 @@ sieve demo
 ```
 
 It runs a six-message scripted conversation — a new identity introduces themselves, shares a couple of facts, asks Sieve to recall them, and then asks about a person who was never mentioned. You will see recall hits on the seeded facts, and a refusal on the absence-trap question.
+
+## Benchmark
+
+Don't trust the numbers at the top — run the benchmark yourself:
+
+```bash
+sieve benchmark
+```
+
+It runs a 15-message scripted conversation (introduce facts → ask retrieval questions → deeper follow-ups → temporal updates → a trap query about something that was never mentioned) and prints a per-message table plus overall totals. You get:
+
+- **Per-turn inbound vs outbound tokens** (the proxy reports both directly)
+- **Facts learned per message** (polled from the store before and after each turn)
+- **Time per turn**
+- **Whether the absence-signal layer fired on the trap** (fuzzy but explicit — both the fact-count delta and the response text are shown)
+
+The benchmark works against any OpenAI-compatible or Ollama-compatible model pointed at by `sieve.yaml` — the prompts do not depend on the model knowing specific facts.
 
 ## Managing Sieve
 
