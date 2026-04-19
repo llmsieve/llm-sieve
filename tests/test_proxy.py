@@ -13,6 +13,7 @@ from sieve.config import (
     ListenConfig,
     ProviderConfig,
     RecallConfig,
+    RetrievalConfig,
     SecurityConfig,
     StoreConfig,
 )
@@ -41,6 +42,11 @@ def mock_config(httpx_mock, tmp_path):
             ollama_url="https://upstream",
             ollama_model="nomic-embed-text",
         ),
+        # Disable the cross-encoder reranker so app startup doesn't
+        # phone home to huggingface.co to download the ONNX model
+        # (pytest-httpx would otherwise flag the GET as an unexpected
+        # request at teardown, and CI has no cached model on disk).
+        retrieval=RetrievalConfig(reranker_enabled=False),
         security=SecurityConfig(auth_token=TEST_AUTH_TOKEN),
     )
 
