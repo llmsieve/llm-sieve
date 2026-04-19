@@ -189,9 +189,8 @@ def status():
         console.print(f"  Store: [red]error[/] {exc}")
 
 
-@cli.command()
-def stop():
-    """Gracefully stop the Sieve proxy."""
+def _stop_proxy() -> None:
+    """Shared stop logic so `sieve stop` and `sieve restart` use the same path."""
     pid = _read_pid()
     if pid is None:
         if PID_FILE.exists():
@@ -210,7 +209,6 @@ def stop():
         console.print("[yellow]Sieve was not running.[/]")
         return
 
-    # Wait up to 5s for graceful shutdown.
     import time
     for _ in range(50):
         if not _pid_alive(pid):
@@ -220,6 +218,62 @@ def stop():
         time.sleep(0.1)
 
     console.print("[bold yellow]Sieve did not exit within 5s — leaving PID file.[/]")
+
+
+@cli.command()
+def stop():
+    """Gracefully stop the Sieve proxy."""
+    _stop_proxy()
+
+
+@cli.command()
+@click.option("--port", "-p", default=None, type=int, help="Override listen port")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+def restart(port: int | None, verbose: bool):
+    """Stop and start the Sieve proxy in one step."""
+    _stop_proxy()
+    # Replace this process with `sieve start` so the new foreground proxy
+    # takes over the terminal. Extra flags are forwarded.
+    argv = ["sieve", "start"]
+    if port is not None:
+        argv += ["--port", str(port)]
+    if verbose:
+        argv += ["--verbose"]
+    console.print(f"[dim]Exec:[/] {' '.join(argv)}")
+    os.execvp(argv[0], argv)
+
+
+@cli.command()
+@click.option("--soft", is_flag=True, help="Preserve ~/.sieve/ (default behaviour)")
+@click.option("--hard", is_flag=True, help="Delete ~/.sieve/ completely")
+def uninstall(soft: bool, hard: bool):
+    """Remove Sieve. Default behaviour is --soft (data preserved)."""
+    from sieve import cli_uninstall as cu
+    if soft and hard:
+        console.print("[bold red]--soft and --hard are mutually exclusive.[/]")
+        sys.exit(2)
+
+    if hard:
+        console.print(
+            "[bold red]This will PERMANENTLY DELETE all learned data "
+            "in ~/.sieve/ (facts, entities, key, backups).[/]"
+        )
+        typed = click.prompt("Type 'DELETE' to confirm", default="", show_default=False)
+        if typed != "DELETE":
+            console.print("[yellow]Aborted — no changes made.[/]")
+            sys.exit(1)
+        cu.wipe_sieve_dir(SIEVE_DIR)
+        console.print("[bold green]Sieve data directory removed.[/]")
+    else:
+        console.print(
+            f"[green]Your data is preserved at[/] [cyan]{SIEVE_DIR}[/]"
+        )
+        console.print(
+            f"[dim]To remove it later:[/] [cyan]rm -rf {SIEVE_DIR}[/]"
+        )
+
+    console.print("")
+    console.print(cu.pip_uninstall_hint())
 
 
 # --- Store subcommands ---
