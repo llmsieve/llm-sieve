@@ -1,0 +1,98 @@
+# Sieve — example configuration with shipping defaults.
+#
+# Copy to sieve.yaml (or pass --config <path>) and edit as needed.
+# Self-contained architecture (2026-04-18): FastEmbed for embeddings,
+# user's main model for S2 extraction. Zero external model dependency
+# beyond the user's own LLM.
+
+listen:
+  host: 127.0.0.1
+  port: 11435
+
+provider:
+  type: auto
+  base_url: http://127.0.0.1:11434   # Ollama endpoint; override per host
+  default_model: qwen3.5:9b
+  options:
+    think: false                      # qwen/deepseek only; never gemma/mistral
+
+# Embedding backend. Default "fastembed" runs BAAI/bge-small-en-v1.5
+# in-process via ONNX Runtime — 384-dim, ~50MB auto-downloaded at
+# startup, no external service. Switch to "ollama" only if you already
+# operate an Ollama-based embedding pipeline.
+embeddings:
+  provider: fastembed
+  # Uncomment and set these to opt back into the Ollama path:
+  # provider: ollama
+  # ollama_url: http://127.0.0.1:11434
+  # ollama_model: nomic-embed-text-v2-moe
+
+store:
+  path: ~/.sieve/memory.db            # SQLCipher-encrypted store
+  # embedding_model / embedding_dimensions are only consulted when
+  # embeddings.provider == "ollama". Ignore for the FastEmbed default.
+
+pipeline:
+  conversation_turns: 3
+  max_rounds: 5
+  core_facts_size: 30
+  context_format: auto
+
+# Profile owner — pins canonical identity into writer S2 prompt
+# and used by the ghost-fact validator. Change both name and aliases
+# when running a different dataset (e.g. Bob Martinez evaluation).
+profile_owner:
+  name: "Mary Chen"
+  aliases:
+    - "Mary"
+    - "I"
+    - "me"
+    - "the user"
+    - "user"
+
+writer:
+  # "auto" routes S2 fact extraction to provider.default_model so there's
+  # no separate writer model to load. Override with an explicit model
+  # name (e.g. "recall-writer-cpu") to keep the legacy CPU-pinned writer.
+  model: auto
+  fallback_model: auto
+  num_ctx: 4096
+  ghost_validator_enabled: true
+
+retrieval:
+  temporal_dedup_enabled: true
+
+tools:
+  enabled: true
+  compression: moderate
+  l1_threshold: 0.5
+  fallback_include_all: true
+  max_tools_injected: 10
+
+learning:
+  tune_interval: 50
+  relevance_threshold: 0.7
+  core_facts_size: 30
+
+security:
+  auth_token: null                    # Probe/eval runs require null
+  allowed_origins: ["127.0.0.1"]
+
+ablation:
+  # Always-on subsystems
+  fingerprinting: true
+  classifier: true
+  pre_populate: true
+  graph_traversal: true
+  temporal_versioning: true
+  learning_loop: true
+  coherence_integrity: true
+  stage2_writer: true
+  recall_tool: true
+  absence_signal: true                # Layer 1 (on)
+  closed_world: false                 # Layer 2 (permanently off)
+  response_verification: false        # Layer 3 (off — pattern coverage pending)
+  # v1.0.0-patent shipping defaults
+  schema_v2: false
+  tier2_classifier: false
+  extreme_summary: true               # EXTREME narrative summariser on
