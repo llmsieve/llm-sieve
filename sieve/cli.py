@@ -291,6 +291,179 @@ def store_status(config_path: str | None):
     console.print(f"  Sessions: {s['sessions_count']}")
 
 
+# --- Store inspection subcommands ---
+
+def _open_store(config_path: str | None):
+    """Helper used by the inspection commands — opens the store for reads,
+    returning (MemoryStore, RecallConfig).
+    """
+    from sieve.store import MemoryStore
+    cfg = RecallConfig.load(config_path)
+    ms = MemoryStore(cfg.store)
+    if not ms.db_path.exists():
+        console.print("[bold red]Store not found.[/] Run [cyan]sieve store init[/].")
+        sys.exit(1)
+    ms.open()
+    return ms, cfg
+
+
+def _facts_table(rows):
+    from rich.table import Table
+    table = Table(title=f"Facts ({len(rows)})", show_lines=False)
+    table.add_column("Content", overflow="fold")
+    table.add_column("Conf", justify="right")
+    table.add_column("Source")
+    table.add_column("Created")
+    for r in rows:
+        table.add_row(
+            r["content"],
+            f"{r['confidence']:.2f}" if r["confidence"] is not None else "",
+            r["source"] or "",
+            (r["created_at"] or "")[:19],
+        )
+    return table
+
+
+@store.command("facts")
+@click.option("--limit", default=50, type=int, help="Max rows to display")
+@click.option("--search", default=None, help="Substring filter on content")
+@click.option("--config", "-c", "config_path", default=None)
+def store_facts_cmd(limit: int, search: str | None, config_path: str | None):
+    """List facts currently in the store."""
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        rows = csi.list_facts(ms.conn, limit=limit, search=search)
+        console.print(_facts_table(rows))
+    finally:
+        ms.close()
+
+
+@store.command("entities")
+@click.option("--limit", default=50, type=int)
+@click.option("--search", default=None)
+@click.option("--config", "-c", "config_path", default=None)
+def store_entities_cmd(limit: int, search: str | None, config_path: str | None):
+    """List entities with fact counts."""
+    from rich.table import Table
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        rows = csi.list_entities(ms.conn, limit=limit, search=search)
+        table = Table(title=f"Entities ({len(rows)})")
+        table.add_column("Name"); table.add_column("Type"); table.add_column("Facts", justify="right")
+        for r in rows:
+            table.add_row(r["name"], r["type"] or "", str(r["fact_count"]))
+        console.print(table)
+    finally:
+        ms.close()
+
+
+@store.command("relationships")
+@click.option("--limit", default=50, type=int)
+@click.option("--config", "-c", "config_path", default=None)
+def store_rel_cmd(limit: int, config_path: str | None):
+    """List entity → entity relationships."""
+    from rich.table import Table
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        rows = csi.list_relationships(ms.conn, limit=limit)
+        table = Table(title=f"Relationships ({len(rows)})")
+        table.add_column("Source"); table.add_column("Relationship"); table.add_column("Target")
+        table.add_column("Conf", justify="right"); table.add_column("Status")
+        for r in rows:
+            table.add_row(
+                r["source_name"], r["relationship"], r["target_name"],
+                f"{r['confidence']:.2f}" if r["confidence"] is not None else "",
+                r["status"] or "",
+            )
+        console.print(table)
+    finally:
+        ms.close()
+
+
+@store.command("episodes")
+@click.option("--limit", default=50, type=int)
+@click.option("--config", "-c", "config_path", default=None)
+def store_episodes_cmd(limit: int, config_path: str | None):
+    """List episodic memories."""
+    from rich.table import Table
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        rows = csi.list_episodes(ms.conn, limit=limit)
+        table = Table(title=f"Episodes ({len(rows)})")
+        table.add_column("Summary", overflow="fold"); table.add_column("Created")
+        for r in rows:
+            table.add_row(r["summary"], (r["created_at"] or "")[:19])
+        console.print(table)
+    finally:
+        ms.close()
+
+
+@store.command("stats")
+@click.option("--config", "-c", "config_path", default=None)
+def store_stats_cmd(config_path: str | None):
+    """Detailed statistics for the store."""
+    from rich.table import Table
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        stats = csi.detailed_stats(ms.conn, ms.db_path)
+    finally:
+        ms.close()
+
+    t = Table(title=f"Store — {ms.db_path}")
+    t.add_column("Metric"); t.add_column("Value", justify="right")
+    for k in ("facts", "entities", "relationships", "episodes",
+              "preferences", "sessions", "known_unknowns", "vec_facts",
+              "audit_log", "fingerprints"):
+        t.add_row(k, str(stats.get(k, 0)))
+    size_kb = stats.get("db_size_bytes", 0) / 1024
+    t.add_row("db_size_kb", f"{size_kb:.1f}")
+    t.add_row("avg_facts_per_entity", str(stats.get("avg_facts_per_entity", 0)))
+    console.print(t)
+
+
+@store.command("export")
+@click.option("--format", "fmt", type=click.Choice(["json", "csv"]), default="json")
+@click.option("--output", "-o", required=True, help="Output file (json) or directory (csv)")
+@click.option("--config", "-c", "config_path", default=None)
+def store_export_cmd(fmt: str, output: str, config_path: str | None):
+    """Export store contents (decrypted)."""
+    from pathlib import Path
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        if fmt == "json":
+            csi.export_json(ms.conn, Path(output))
+        else:
+            csi.export_csv(ms.conn, Path(output))
+    finally:
+        ms.close()
+    console.print(f"[green]Exported {fmt} to[/] [cyan]{output}[/]")
+
+
+@store.command("wipe")
+@click.option("--config", "-c", "config_path", default=None)
+def store_wipe_cmd(config_path: str | None):
+    """Delete all data from the store (keeps schema + key)."""
+    console.print("[bold red]This will delete ALL learned data from the store.[/]")
+    typed = click.prompt("Type 'WIPE' to confirm", default="", show_default=False)
+    if typed != "WIPE":
+        console.print("[yellow]Aborted — no changes made.[/]")
+        sys.exit(1)
+
+    from sieve import cli_store_inspect as csi
+    ms, _ = _open_store(config_path)
+    try:
+        csi.wipe_store(ms.conn)
+    finally:
+        ms.close()
+    console.print("[bold green]Store wiped.[/] Schema and key preserved.")
+
+
 # --- Config subcommands ---
 
 @cli.group()
@@ -406,6 +579,137 @@ def config_edit():
         sys.exit(2)
 
     console.print("[green]Config saved.[/]")
+
+
+# --- Key management subcommands ---
+
+@cli.group()
+def key():
+    """Manage the encryption key protecting the memory store."""
+    pass
+
+
+def _keyfile_path(config_path: str | None) -> Path:
+    """Resolve the keyfile path from the config."""
+    from sieve import cli_keys
+    cfg = RecallConfig.load(config_path)
+    db = Path(cfg.store.path).expanduser()
+    return cli_keys.keyfile_for(db)
+
+
+@key.command("show")
+@click.option("--config", "-c", "config_path", default=None)
+def key_show(config_path: str | None):
+    """Show keyfile location and fingerprint (the key itself is never displayed)."""
+    from sieve import cli_keys
+    kf = _keyfile_path(config_path)
+    if not kf.exists():
+        console.print(f"[bold red]Keyfile not found at[/] [cyan]{kf}[/]")
+        console.print(
+            "[dim]One will be generated on first `sieve start`, or use `sieve key import`.[/]"
+        )
+        sys.exit(1)
+    key_txt = kf.read_text().strip()
+    fp = cli_keys.fingerprint(key_txt)
+    console.print(f"[bold green]Keyfile:[/] [cyan]{kf}[/]")
+    console.print(f"[bold green]Fingerprint:[/] [cyan]{fp}[/]")
+    mode = oct(kf.stat().st_mode)[-3:]
+    if mode != "600":
+        console.print(f"[yellow]Warning:[/] permissions are {mode} (expected 600)")
+
+
+@key.command("rotate")
+@click.option("--config", "-c", "config_path", default=None)
+def key_rotate(config_path: str | None):
+    """Re-encrypt the store with a new key (destructive — back up first)."""
+    from sieve import cli_keys
+
+    cfg = RecallConfig.load(config_path)
+    db_path = Path(cfg.store.path).expanduser()
+    kf = cli_keys.keyfile_for(db_path)
+
+    if not db_path.exists():
+        console.print("[bold red]Store not found.[/]")
+        sys.exit(1)
+    if not kf.exists():
+        console.print("[bold red]Keyfile not found.[/] Cannot rotate.")
+        sys.exit(1)
+
+    console.print(
+        "[bold red]Key rotation re-encrypts the entire store.[/] "
+        "If this is interrupted your store may become unreadable."
+    )
+    console.print(
+        "[yellow]Strongly recommended:[/] run [cyan]sieve backup create[/] first."
+    )
+    typed = click.prompt("Type 'ROTATE' to confirm", default="", show_default=False)
+    if typed != "ROTATE":
+        console.print("[yellow]Aborted — no changes made.[/]")
+        sys.exit(1)
+
+    old_key = kf.read_text().strip()
+
+    # Auto-generate or custom?
+    auto = click.confirm(
+        "Generate a new random key automatically?", default=True
+    )
+    if auto:
+        new_key = cli_keys.generate_key()
+    else:
+        new_key = click.prompt("New passphrase", hide_input=True)
+        if not new_key:
+            console.print("[bold red]Empty passphrase — aborted.[/]")
+            sys.exit(1)
+
+    try:
+        cli_keys.rotate_key(db_path, old_key=old_key, new_key=new_key)
+    except Exception as exc:
+        console.print(f"[bold red]Rotation failed:[/] {exc}")
+        sys.exit(1)
+
+    console.print("[bold green]Key rotated successfully.[/]")
+    console.print(f"  Keyfile: [cyan]{kf}[/]")
+    console.print(f"  Fingerprint: [cyan]{cli_keys.fingerprint(new_key)}[/]")
+
+
+@key.command("export")
+@click.option("--config", "-c", "config_path", default=None)
+def key_export(config_path: str | None):
+    """Print the raw key to stdout. For backup — handle carefully."""
+    kf = _keyfile_path(config_path)
+    if not kf.exists():
+        console.print("[bold red]Keyfile not found.[/]")
+        sys.exit(1)
+
+    console.print(
+        "[bold yellow]WARNING:[/] This will print your encryption key. "
+        "Anyone with this key can read your memory store. "
+        "Store it somewhere safe (password manager, offline backup)."
+    )
+    click.confirm("Continue?", abort=True)
+
+    console.print("")
+    console.print(kf.read_text().strip())
+
+
+@key.command("import")
+@click.argument("keyfile", type=click.Path(exists=True, dir_okay=False))
+@click.option("--config", "-c", "config_path", default=None)
+def key_import(keyfile: str, config_path: str | None):
+    """Import a key from KEYFILE and verify it opens the current store."""
+    from sieve import cli_keys
+    cfg = RecallConfig.load(config_path)
+    db_path = Path(cfg.store.path).expanduser()
+    if not db_path.exists():
+        console.print("[bold red]Store not found.[/]")
+        sys.exit(1)
+    try:
+        cli_keys.import_key(db_path, Path(keyfile))
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[bold red]Import failed:[/] {exc}")
+        sys.exit(1)
+
+    console.print(f"[bold green]Key imported.[/] Fingerprint: [cyan]{cli_keys.fingerprint(Path(keyfile).read_text().strip())}[/]")
 
 
 # --- Backup subcommands ---
