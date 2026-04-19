@@ -1,13 +1,10 @@
 # Sieve — Wizard install GIF (guided path).
 #
 # Render:
-#   docker run --rm --network host -v "$PWD":/work -w /work \
-#     ghcr.io/charmbracelet/vhs branding/sieve-wizard-install.tape
+#   ./branding/render-gifs.sh wizard
 #
-# Output: branding/sieve-wizard-install.gif
-#
-# VHS drives the interactive prompts directly — no expect, no TTY hacks.
-# Needs Ollama on :11434.
+# VHS drives the interactive prompts directly. The render-gifs.sh wrapper
+# sets up an isolated $HOME and a pip shim so the tape runs from scratch.
 
 Output branding/sieve-wizard-install.gif
 Set FontSize 15
@@ -16,53 +13,74 @@ Set Height 620
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 70ms
 Set Padding 22
+Set Shell bash
 
 Sleep 1500ms
 
 # Kick off the guided wizard.
 Type "sieve init --wizard"
 Enter
-Sleep 2500ms
+Sleep 2800ms
 
-# Step 1 — accept detected Ollama URL.
+# Step 1 — provider type (1=Ollama). Accept default.
 Enter
 Sleep 1200ms
 
-# Step 2 — accept default model.
+# Step 2 — provider base URL. Accept default (auto-detected Ollama).
+Enter
+Sleep 3500ms
+
+# Step 3 — model picker. Accept default (first model in the list).
 Enter
 Sleep 1200ms
 
-# Step 3 — accept default port (11435).
+# Step 4 — listen port. Accept default (11435); on this recording
+# machine another dev server is already on 11435, so type a free port.
+Type "11437"
 Enter
 Sleep 1200ms
 
-# Step 4 — accept default store location.
+# Step 5 — auto-generate encryption key. Accept default (Yes).
 Enter
 Sleep 1200ms
 
-# Step 5 — accept encryption enabled.
+# Step 6 — store path. Accept default.
 Enter
-Sleep 1200ms
+Sleep 1800ms
 
-# Step 6 — confirm.
+# Summary + Proceed? — confirm.
 Type "y"
 Enter
-Sleep 6000ms
+Sleep 7000ms
 
 # Decline the benchmark offer for this GIF (we'll show it separately).
 Type "n"
 Enter
 Sleep 1800ms
 
-# Start the proxy.
-Type "sieve start &"
+# Silent tweaks so the GIF stays brisk and we don't collide with any
+# dev server already bound to the default port on the recording machine.
+Hide
+Type "sieve config set provider.default_model qwen3:14b"
 Enter
-Sleep 3000ms
+Sleep 600ms
+Type "sieve config set listen.port 11437"
+Enter
+Sleep 600ms
+Type "clear"
+Enter
+Sleep 400ms
+Show
+
+# Start the proxy. Redirect so request-level logs don't crowd the GIF.
+Type "sieve start >/dev/null 2>&1 &"
+Enter
+Sleep 3500ms
 
 # Run the demo.
 Type "sieve demo"
 Enter
-Sleep 20000ms
+Sleep 90000ms
 
 # Inspect what the store learned.
 Type "sieve store stats"

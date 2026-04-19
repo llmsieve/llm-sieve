@@ -29,21 +29,36 @@ Type "sieve init"
 Enter
 Sleep 4500ms
 
-# Start the proxy in the background so the demo below has something to hit.
-Type "sieve start &"
+# Silent tweaks so the GIF stays brisk and we don't collide with any
+# dev server already bound to the default port on the recording machine.
+Hide
+Type "sieve config set provider.default_model qwen3:14b"
 Enter
-Sleep 3200ms
+Sleep 600ms
+Type "sieve config set listen.port 11437"
+Enter
+Sleep 600ms
+Type "clear"
+Enter
+Sleep 400ms
+Show
+
+# Start the proxy in the background. Redirect so request-level logs
+# don't crowd the GIF while `sieve demo` runs in the foreground.
+Type "sieve start >/dev/null 2>&1 &"
+Enter
+Sleep 3500ms
 
 # The real demo — six scripted turns that show facts being learned and
 # the absence-signal path working on a trap query.
 Type "sieve demo"
 Enter
-Sleep 22000ms
+Sleep 90000ms
 
 # Peek at what Sieve learned.
 Type "sieve status"
 Enter
-Sleep 3000ms
+Sleep 3500ms
 
 # Clean up.
 Type "sieve stop"

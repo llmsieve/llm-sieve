@@ -7,15 +7,17 @@
 #   branding/render-gifs.sh wizard     # renders sieve-wizard-install.gif
 #   branding/render-gifs.sh all        # renders both
 #
-# Requirements:
-#   - Docker with the charmbracelet/vhs image pulled
-#   - A locally-installed `sieve` (from `pip install -e .` in the repo)
+# Requirements (one of):
+#   - Native VHS (go install github.com/charmbracelet/vhs@latest) + ttyd + ffmpeg, OR
+#   - Docker with ghcr.io/charmbracelet/vhs pulled
+#   - A locally-installed `sieve` (from `uv pip install -e .` in the repo)
 #   - A running Ollama on :11434 with the model in sieve.yaml loaded
 #
-# The script runs `sieve stop` before and after each recording so the
-# tape starts from a clean slate, and uses a fake `pip` shim so the
-# `pip install llm-sieve` line in the tape looks realistic without
-# actually hitting PyPI.
+# The script runs `sieve stop` before each recording so the tape starts
+# from a clean slate, uses a fake `pip` shim so the `pip install` line
+# in the tapes renders as a realistic success banner without hitting
+# PyPI, and isolates each recording under a fresh $HOME so your real
+# ~/.sieve state is never touched.
 
 set -euo pipefail
 
@@ -28,13 +30,20 @@ if [[ ! -x "$REPO_ROOT/.venv/bin/sieve" ]]; then
   exit 1
 fi
 
-# Build a throwaway VHS shim directory that lives only for this run.
+# Prefer native VHS if it's on PATH. Fall back to the Docker image.
+VHS_BIN=""
+if command -v vhs >/dev/null 2>&1; then
+  VHS_BIN="vhs"
+elif [[ -x "$HOME/go/bin/vhs" ]]; then
+  VHS_BIN="$HOME/go/bin/vhs"
+fi
+
+# Build a throwaway shim directory that lives only for this run.
 SHIM_DIR="$(mktemp -d)"
 trap 'rm -rf "$SHIM_DIR"' EXIT
 
-# A believable-looking fake pip — VHS types `pip install llm-sieve`
-# and we want to show a realistic success banner, not the 404 you'd get
-# from a re-install or a command-not-found from the VHS container.
+# Believable-looking fake pip — VHS types `pip install llm-sieve` and
+# we want a realistic success banner, not a 404 or a command-not-found.
 cat > "$SHIM_DIR/pip" <<'SHIM'
 #!/usr/bin/env bash
 if [[ "$1" == "install" ]]; then
@@ -49,26 +58,58 @@ fi
 SHIM
 chmod +x "$SHIM_DIR/pip"
 
-# Ensure a clean proxy state before each recording.
+# Ensure no proxy is running from a prior session.
 "$REPO_ROOT/.venv/bin/sieve" stop >/dev/null 2>&1 || true
+
+# SPEED is the playback multiplier applied via ffmpeg after VHS is done.
+# e.g. SPEED=2.5 means 40-second raw recording becomes a 16-second GIF.
+# Defaults to 2.5× so the tape can record real inference turns without
+# the final GIF feeling laggy.
+SPEED="${SPEED:-2.5}"
+
+# Guess the output GIF path from the "Output" directive in the tape.
+gif_from_tape() {
+  local tape="$1"
+  awk '/^Output / {print $2; exit}' "$tape"
+}
 
 render_one() {
   local tape="$1"
-  # Give each recording an isolated $HOME so we don't clobber ~/.sieve.
   local fake_home
   fake_home="$(mktemp -d)"
   echo "→ rendering $tape  (isolated HOME: $fake_home)"
-  docker run --rm \
-    --network host \
-    -v "$REPO_ROOT":/work \
-    -v "$SHIM_DIR":/shim \
-    -v "$REPO_ROOT/.venv":/venv \
-    -v "$fake_home":/tmphome \
-    -e "HOME=/tmphome" \
-    -e "PATH=/shim:/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    -w /work \
-    ghcr.io/charmbracelet/vhs "$tape"
+  if [[ -n "$VHS_BIN" ]]; then
+    HOME="$fake_home" \
+      PATH="$SHIM_DIR:$REPO_ROOT/.venv/bin:$PATH" \
+      "$VHS_BIN" "$tape"
+  else
+    docker run --rm \
+      --network host \
+      -v "$REPO_ROOT":/work \
+      -v "$SHIM_DIR":/shim \
+      -v "$REPO_ROOT/.venv":/venv \
+      -v "$fake_home":/tmphome \
+      -e "HOME=/tmphome" \
+      -e "PATH=/shim:/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      -w /work \
+      ghcr.io/charmbracelet/vhs "$tape"
+  fi
   rm -rf "$fake_home"
+  # Kill any proxy that the tape may have left running in the background.
+  "$REPO_ROOT/.venv/bin/sieve" stop >/dev/null 2>&1 || true
+
+  # Speed-adjust the rendered GIF. SPEED=1 means "leave alone".
+  local gif
+  gif="$(gif_from_tape "$tape")"
+  if [[ -n "$gif" && -f "$gif" ]] && awk "BEGIN{exit !($SPEED > 1)}"; then
+    echo "→ speeding up $gif by ${SPEED}× via ffmpeg"
+    local tmp="${gif%.gif}.raw.gif"
+    mv "$gif" "$tmp"
+    ffmpeg -y -i "$tmp" \
+      -vf "setpts=PTS/${SPEED},split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
+      -loop 0 "$gif" </dev/null >/dev/null 2>&1
+    rm -f "$tmp"
+  fi
 }
 
 case "${1:-all}" in

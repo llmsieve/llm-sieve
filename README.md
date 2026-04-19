@@ -66,7 +66,7 @@ Point your agent at `http://127.0.0.1:11435` instead of your usual LLM endpoint.
 
 ### One command
 
-<p align="center"><img src="branding/sieve-demo.gif" alt="Sieve CLI demo" width="720"></p>
+<p align="center"><img src="branding/sieve-quick-install.gif" alt="Quick install demo" width="720"></p>
 
 ### Guided setup
 
@@ -75,6 +75,8 @@ If you prefer to be asked about each option — provider URL, model, port, encry
 ```bash
 sieve init --wizard
 ```
+
+<p align="center"><img src="branding/sieve-wizard-install.gif" alt="Wizard install demo" width="720"></p>
 
 Full walkthrough: [Getting started](https://llmsieve.dev/getting-started/).
 
