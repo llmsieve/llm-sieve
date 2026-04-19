@@ -1211,6 +1211,29 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         except Exception as exc:
             logger.warning("Tool registry ingest failed: %s", exc)
 
+    def _payload_tokens(payload: dict) -> int:
+        """Rough token count for a chat payload (messages + tools)."""
+        from sieve.validation_collector import _approx_tokens
+        total = 0
+        for msg in payload.get("messages", []) or []:
+            c = msg.get("content", "")
+            if isinstance(c, str):
+                total += _approx_tokens(c)
+            else:
+                total += _approx_tokens(json.dumps(c))
+        tools = payload.get("tools")
+        if tools:
+            total += _approx_tokens(json.dumps(tools))
+        return total
+
+    def _attach_token_headers(response, inbound_tokens: int, outbound_tokens: int) -> None:
+        """Expose inbound/outbound token counts so middleware + CLI benchmarks can observe Sieve's effect."""
+        try:
+            response.headers["X-Sieve-Inbound-Tokens"] = str(inbound_tokens)
+            response.headers["X-Sieve-Outbound-Tokens"] = str(outbound_tokens)
+        except Exception:
+            pass
+
     # --- Intercepted chat endpoints (Phase 4+5: strip + compose + write + forward) ---
 
     @app.post("/api/chat")
@@ -1302,6 +1325,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 response, val_metrics, t_start, api_format="ollama",
                 recall_rounds=recall_rounds,
             )
+            _attach_token_headers(response, _payload_tokens(payload), _payload_tokens(lean))
             return response
         except Exception as exc:
             logger.warning("Pipeline failed, forwarding original payload: %s", exc)
@@ -1392,6 +1416,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 response, val_metrics, t_start, api_format="openai",
                 recall_rounds=recall_rounds,
             )
+            _attach_token_headers(response, _payload_tokens(payload), _payload_tokens(lean))
             return response
         except Exception as exc:
             logger.warning("Pipeline failed, forwarding original payload: %s", exc)

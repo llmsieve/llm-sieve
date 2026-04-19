@@ -952,6 +952,24 @@ def _run_wizard_flow() -> None:
 
     console.print("[bold green]Wizard complete.[/] Start with [cyan]sieve start[/].")
 
+    # Offer the benchmark as a post-install sanity check. This is the
+    # "prove it works on your machine" path — token reduction, memory
+    # learning, and absence-signal detection in one shot.
+    console.print()
+    run_bench = click.confirm(
+        "Run sieve benchmark now to verify token reduction on your machine?",
+        default=False,
+    )
+    if run_bench:
+        if _read_pid() is None:
+            console.print(
+                "\n[yellow]The proxy is not running yet.[/] "
+                "Open another terminal and run [cyan]sieve start[/], "
+                "then come back here and run [cyan]sieve benchmark[/].\n"
+            )
+        else:
+            cli.main(args=["benchmark"], standalone_mode=False)
+
 
 @cli.command()
 @click.option("--provider", default=None, help="LLM provider base URL (e.g. http://localhost:11434)")
@@ -1155,6 +1173,72 @@ def demo():
     console.print(
         "[dim]Check [cyan]sieve status[/] to see how many facts Sieve learned.[/]"
     )
+
+
+@cli.command()
+@click.option("--config", "-c", "config_path", default=None, help="Path to sieve.yaml")
+@click.option("--model", default=None, help="Override the model name (defaults to provider.default_model)")
+def benchmark(config_path: str | None, model: str | None):
+    """Run a reproducible 15-message benchmark against the proxy.
+
+    Anyone can run this to verify the token-reduction and memory-learning
+    claims on their own machine. Requires the proxy to be running:
+    start it with ``sieve start`` in another terminal first.
+    """
+    pid = _read_pid()
+    if pid is None:
+        console.print(
+            "[bold red]Sieve is not running.[/] Start it in another terminal with "
+            "[cyan]sieve start[/], then re-run [cyan]sieve benchmark[/]."
+        )
+        sys.exit(1)
+
+    try:
+        config = RecallConfig.load(config_path)
+    except Exception as exc:
+        console.print(f"[bold red]Config error:[/] {exc}")
+        sys.exit(1)
+
+    base = f"http://127.0.0.1:{config.listen.port}"
+    model_name = model or config.provider.default_model
+
+    # The store reader — the benchmark polls it before/after each turn.
+    from sieve.store import MemoryStore
+    ms = MemoryStore(config.store)
+    if not ms.db_path.exists():
+        console.print(
+            "[bold red]Store not found.[/] Run [cyan]sieve init[/] first."
+        )
+        sys.exit(1)
+    ms.open()
+
+    def _count() -> int:
+        try:
+            return int(ms.stats().get("facts_count", 0))
+        except Exception:
+            return 0
+
+    from sieve.cli_benchmark import run_benchmark, render_summary
+
+    console.print(
+        f"[bold]Sieve benchmark[/] — 15 messages through the proxy at "
+        f"[cyan]{base}[/] (model: [cyan]{model_name}[/])\n"
+    )
+    console.print("[dim]This may take 1–3 minutes depending on your model.[/]\n")
+
+    try:
+        summary = run_benchmark(
+            base_url=base,
+            model=model_name,
+            store_fact_count=_count,
+        )
+    except Exception as exc:
+        console.print(f"[bold red]Benchmark failed:[/] {exc}")
+        ms.close()
+        sys.exit(1)
+
+    ms.close()
+    render_summary(summary, model=model_name, base_url=base, console=console)
 
 
 def main() -> None:
