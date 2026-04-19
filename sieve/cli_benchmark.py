@@ -121,6 +121,9 @@ class TurnResult:
     facts_after: int
     elapsed_s: float
     absence_signal: bool | None  # None except on trap; True/False on trap
+    # Progressive-activation phase reported by the proxy for this request.
+    # Empty string on older proxies that don't emit the X-Sieve-Phase header.
+    activation_phase: str = ""
 
 
 @dataclass(frozen=True)
@@ -196,6 +199,7 @@ def run_benchmark(
             # predates the header.
             inbound = int(r.headers.get("X-Sieve-Inbound-Tokens", "0")) or _approx(msg["content"])
             outbound = int(r.headers.get("X-Sieve-Outbound-Tokens", "0"))
+            activation_phase = r.headers.get("X-Sieve-Phase", "")
 
             facts_after = store_fact_count()
 
@@ -214,6 +218,7 @@ def run_benchmark(
                 facts_after=facts_after,
                 elapsed_s=elapsed,
                 absence_signal=absence,
+                activation_phase=activation_phase,
             ))
 
     total_inbound = sum(t.inbound_tokens for t in results)
@@ -264,7 +269,8 @@ def render_summary(
     table = Table(title="Per-message breakdown", show_lines=False)
     table.add_column("#", justify="right", style="dim")
     table.add_column("Phase")
-    table.add_column("Prompt", overflow="fold", max_width=42)
+    table.add_column("Sieve")
+    table.add_column("Prompt", overflow="fold", max_width=38)
     table.add_column("In", justify="right")
     table.add_column("Out", justify="right")
     table.add_column("Cut", justify="right")
@@ -285,9 +291,19 @@ def render_summary(
             "update": "update",
             "trap": "[bold yellow]trap[/]",
         }.get(t.phase, t.phase)
+        # Short, colour-coded activation-phase badge. Older proxies
+        # without progressive activation return an empty header; we
+        # render "—" so the column stays visually aligned.
+        ap = (t.activation_phase or "").upper()
+        activation_badge = {
+            "OBSERVE": "[cyan]obs[/]",
+            "ACCUMULATE": "[yellow]acc[/]",
+            "ACTIVATE": "[green]act[/]",
+        }.get(ap, "[dim]—[/]")
         table.add_row(
             str(t.index),
             phase_label,
+            activation_badge,
             t.prompt,
             str(t.inbound_tokens),
             str(t.outbound_tokens),
@@ -297,6 +313,40 @@ def render_summary(
         )
 
     console.print(table)
+
+    # Per-phase reduction breakdown — makes the phase transitions
+    # visible at a glance. Skipped when the proxy doesn't emit the
+    # X-Sieve-Phase header (older builds).
+    phase_rows: dict[str, tuple[int, int, int]] = {}
+    for t in summary.turns:
+        if not t.activation_phase:
+            continue
+        key = t.activation_phase.upper()
+        count, inb, outb = phase_rows.get(key, (0, 0, 0))
+        phase_rows[key] = (count + 1, inb + t.inbound_tokens, outb + t.outbound_tokens)
+
+    if phase_rows:
+        # Render in phase order: OBSERVE → ACCUMULATE → ACTIVATE, then any others.
+        order = ["OBSERVE", "ACCUMULATE", "ACTIVATE"]
+        ordered_keys = [k for k in order if k in phase_rows] + \
+            [k for k in phase_rows if k not in order]
+        phase_table = Table(title="Per-phase reduction", show_lines=False)
+        phase_table.add_column("Phase")
+        phase_table.add_column("Messages", justify="right")
+        phase_table.add_column("Inbound", justify="right")
+        phase_table.add_column("Outbound", justify="right")
+        phase_table.add_column("Reduction", justify="right")
+        for key in ordered_keys:
+            count, inb, outb = phase_rows[key]
+            reduction = (inb - outb) / inb * 100.0 if inb else 0.0
+            phase_table.add_row(
+                key,
+                str(count),
+                f"{inb:,}",
+                f"{outb:,}",
+                f"{reduction:.1f}%",
+            )
+        console.print(phase_table)
 
     # Overall summary panel
     lines = [

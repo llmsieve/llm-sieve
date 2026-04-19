@@ -17,6 +17,7 @@ from typing import Any
 
 from sieve.config import PipelineConfig
 from sieve.fingerprint import DecomposedPayload, _estimate_tokens
+from sieve.progression import PhaseDecision
 
 logger = logging.getLogger("recall.pipeline")
 
@@ -240,6 +241,7 @@ def compose_lean_payload(
     retrieved_context: str = "",
     profile_owner_pin: str = "",
     pure_general: bool = False,
+    progression: PhaseDecision | None = None,
 ) -> dict:
     """Compose a lean payload from the decomposed original.
 
@@ -259,6 +261,13 @@ def compose_lean_payload(
                       knowledgeable assistant" framing). Used by the
                       caller when the L0 classifier is confident the
                       query needs no personal context.
+        progression: Optional progressive-activation decision. When
+                      supplied, ``progression.turns`` overrides
+                      ``config.conversation_turns`` for the history
+                      trim. When omitted, the pipeline's static
+                      ``conversation_turns`` applies — this preserves
+                      backward compatibility for callers that haven't
+                      wired in phase detection yet.
 
     Returns the new payload dict ready to forward to the LLM.
     """
@@ -293,7 +302,8 @@ def compose_lean_payload(
             history_msgs = json.loads(hist_section.content)
         except (json.JSONDecodeError, TypeError):
             history_msgs = []
-        trimmed = _last_n_turns(history_msgs, config.conversation_turns)
+        turns_to_keep = progression.turns if progression is not None else config.conversation_turns
+        trimmed = _last_n_turns(history_msgs, turns_to_keep)
         messages.extend(trimmed)
 
     # 3. User message (always included)
@@ -375,6 +385,7 @@ async def compose_with_tool_selection(
     retrieved_context: str = "",
     profile_owner_pin: str = "",
     pure_general: bool = False,
+    progression: PhaseDecision | None = None,
 ) -> dict:
     """Layer 2 wrapper: compose the lean payload, then filter tools via the classifier.
 
@@ -394,6 +405,7 @@ async def compose_with_tool_selection(
         retrieved_context=retrieved_context,
         profile_owner_pin=profile_owner_pin,
         pure_general=pure_general,
+        progression=progression,
     )
 
     try:

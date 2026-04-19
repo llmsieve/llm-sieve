@@ -78,6 +78,32 @@ class PipelineConfig:
 
 
 @dataclass
+class ProgressionConfig:
+    """Cold-start progressive activation thresholds and turn budgets.
+
+    Sieve picks one of three phases per request based on the number of
+    ``status='current'`` facts in the store. Each phase specifies how
+    many recent conversation turns the lean-payload composer retains.
+
+    - **OBSERVE** (facts < ``phase_1_threshold``): keep ``observe_turns``
+      prior turns. Writer is extracting aggressively but the store is
+      still thin, so raw conversation history is the safety net.
+    - **ACCUMULATE** (``phase_1_threshold`` <= facts <
+      ``phase_2_threshold``): hybrid — fewer turns, retrieved facts
+      growing in quality.
+    - **ACTIVATE** (facts >= ``phase_2_threshold``): retrieval-driven,
+      lean payload, minimal history.
+
+    The actual phase decision is in ``sieve.progression.detect_phase``.
+    """
+    phase_1_threshold: int = 20    # facts needed to leave OBSERVE
+    phase_2_threshold: int = 50    # facts needed to enter ACTIVATE
+    observe_turns: int = 8
+    accumulate_turns: int = 4
+    activate_turns: int = 2
+
+
+@dataclass
 class WriterConfig:
     # 'auto' routes S2 extraction to provider.default_model so the user's
     # main model handles both inference and extraction. Override with an
@@ -246,6 +272,7 @@ class RecallConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     ablation: AblationConfig = field(default_factory=AblationConfig)
+    progression: ProgressionConfig = field(default_factory=ProgressionConfig)
     profile_owner: ProfileOwnerConfig = field(default_factory=ProfileOwnerConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     mode_override: str = "auto"  # A, B, or auto
@@ -414,6 +441,32 @@ def _build_config(raw: dict) -> RecallConfig:
         extreme_summary=bool(ablation_raw.get("extreme_summary", False)),
     )
 
+    progression_raw = raw.get("progression") or {}
+    progression = ProgressionConfig(
+        phase_1_threshold=int(progression_raw.get("phase_1_threshold", 20)),
+        phase_2_threshold=int(progression_raw.get("phase_2_threshold", 50)),
+        observe_turns=int(progression_raw.get("observe_turns", 8)),
+        accumulate_turns=int(progression_raw.get("accumulate_turns", 4)),
+        activate_turns=int(progression_raw.get("activate_turns", 2)),
+    )
+    # Validate thresholds: they must be non-negative, phase_2 >= phase_1,
+    # and turn counts must be positive. If any rule is violated, warn and
+    # fall back to defaults — same pattern as pipeline.context_format.
+    _log_cfg = logging.getLogger("recall.config")
+    invalid = (
+        progression.phase_1_threshold < 0
+        or progression.phase_2_threshold < progression.phase_1_threshold
+        or progression.observe_turns <= 0
+        or progression.accumulate_turns <= 0
+        or progression.activate_turns <= 0
+    )
+    if invalid:
+        _log_cfg.warning(
+            "progression config invalid (%s); defaulting to %s",
+            progression, ProgressionConfig(),
+        )
+        progression = ProgressionConfig()
+
     owner_raw = raw.get("profile_owner") or {}
     aliases_raw = owner_raw.get("aliases", [])
     if isinstance(aliases_raw, str):
@@ -437,7 +490,8 @@ def _build_config(raw: dict) -> RecallConfig:
         embeddings=embeddings,
         pipeline=pipeline, writer=writer, retrieval=retrieval, learning=learning,
         security=security, tools=tools,
-        ablation=ablation, profile_owner=profile_owner,
+        ablation=ablation, progression=progression,
+        profile_owner=profile_owner,
         validation=validation,
         mode_override=mode_override,
     )

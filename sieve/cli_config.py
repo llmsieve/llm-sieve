@@ -78,6 +78,12 @@ _SETTABLE: dict[str, tuple[type, set | None]] = {
     "tools.fallback_include_all": (bool, None),
     "tools.max_tools_injected": (int, None),
 
+    "progression.phase_1_threshold": (int, None),
+    "progression.phase_2_threshold": (int, None),
+    "progression.observe_turns": (int, None),
+    "progression.accumulate_turns": (int, None),
+    "progression.activate_turns": (int, None),
+
     "ablation.absence_signal": (bool, None),
     "ablation.closed_world": (bool, None),
     "ablation.response_verification": (bool, None),

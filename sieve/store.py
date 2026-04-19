@@ -466,6 +466,19 @@ class MemoryStore:
             return None
         return self._row_to_dict("facts", row)
 
+    def count_current_facts(self) -> int:
+        """Return the number of ``status='current'`` facts in the store.
+
+        Used by the progressive-activation phase detector. Cheap (single
+        indexed SELECT COUNT) and safe to call per-request; the proxy
+        queries it at the top of every intercepted chat to pick OBSERVE
+        / ACCUMULATE / ACTIVATE.
+        """
+        row = self.conn.execute(
+            "SELECT count(*) FROM facts WHERE status = 'current'"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     def get_facts(self, status: str = "current", limit: int = 100) -> list[dict[str, Any]]:
         """Get facts filtered by status."""
         rows = self.conn.execute(

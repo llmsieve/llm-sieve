@@ -20,6 +20,7 @@ from sieve.fingerprint import FingerprintCache, decompose
 from sieve.learning import LearningLoop
 from sieve.history_preamble_adapter import adapt_history_preamble_payload
 from sieve.pipeline import compose_lean_payload, compose_with_tool_selection
+from sieve.progression import detect_phase
 from sieve.tool_registry import ToolRegistry
 from sieve.proxy import ProxyClient, forward_payload, forward_request
 from sieve.recall_tool import RecallHandler
@@ -1234,6 +1235,34 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         except Exception:
             pass
 
+    def _attach_phase_header(response, phase) -> None:
+        """Expose progressive-activation phase + fact count on the response.
+
+        Observable by the CLI demo, benchmark, and tests so the active
+        phase is visible without having to tail proxy logs.
+        """
+        try:
+            response.headers["X-Sieve-Phase"] = phase.label
+            response.headers["X-Sieve-Fact-Count"] = str(phase.fact_count)
+        except Exception:
+            pass
+
+    def _detect_current_phase():
+        """Read the store once per request and derive the active phase.
+
+        Counts ``status='current'`` facts in the store and maps to one of
+        OBSERVE / ACCUMULATE / ACTIVATE via the configured thresholds.
+        Store read failures log and default to OBSERVE so the proxy still
+        delivers a safe, conservative payload if the DB is momentarily
+        unavailable.
+        """
+        try:
+            fact_count = memory_store.count_current_facts() if memory_store._conn is not None else 0
+        except Exception as exc:
+            logger.warning("phase detection: fact count failed (%s); defaulting to 0", exc)
+            fact_count = 0
+        return detect_phase(fact_count, config.progression)
+
     # --- Intercepted chat endpoints (Phase 4+5: strip + compose + write + forward) ---
 
     @app.post("/api/chat")
@@ -1264,6 +1293,8 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             decomposed = decompose(payload, fp_cache, api_format="ollama")
             await _maybe_ingest_tools(payload, decomposed)
             retrieved_context, retrieved_facts, absence_signals, is_pure_general = await _retrieve_context(user_text, decomposed)
+            phase = _detect_current_phase()
+            logger.info("Phase %s", phase.render_tag())
             if tool_classifier is not None and config.tools.enabled:
                 lean = await compose_with_tool_selection(
                     payload, decomposed, config.pipeline,
@@ -1272,6 +1303,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     retrieved_context=retrieved_context,
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
+                    progression=phase,
                 )
             else:
                 lean = compose_lean_payload(
@@ -1279,6 +1311,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     retrieved_context=retrieved_context,
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
+                    progression=phase,
                 )
             # ABL-RT: don't inject recall tool → strip it from lean
             if not config.ablation.recall_tool:
@@ -1326,6 +1359,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 recall_rounds=recall_rounds,
             )
             _attach_token_headers(response, _payload_tokens(payload), _payload_tokens(lean))
+            _attach_phase_header(response, phase)
             return response
         except Exception as exc:
             logger.warning("Pipeline failed, forwarding original payload: %s", exc)
@@ -1357,6 +1391,8 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             decomposed = decompose(payload, fp_cache, api_format="openai")
             await _maybe_ingest_tools(payload, decomposed)
             retrieved_context, retrieved_facts, absence_signals, is_pure_general = await _retrieve_context(user_text, decomposed)
+            phase = _detect_current_phase()
+            logger.info("Phase %s", phase.render_tag())
             if tool_classifier is not None and config.tools.enabled:
                 lean = await compose_with_tool_selection(
                     payload, decomposed, config.pipeline,
@@ -1365,6 +1401,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     retrieved_context=retrieved_context,
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
+                    progression=phase,
                 )
             else:
                 lean = compose_lean_payload(
@@ -1372,6 +1409,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     retrieved_context=retrieved_context,
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
+                    progression=phase,
                 )
             # ABL-RT: strip recall tool
             if not config.ablation.recall_tool:
@@ -1417,6 +1455,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 recall_rounds=recall_rounds,
             )
             _attach_token_headers(response, _payload_tokens(payload), _payload_tokens(lean))
+            _attach_phase_header(response, phase)
             return response
         except Exception as exc:
             logger.warning("Pipeline failed, forwarding original payload: %s", exc)

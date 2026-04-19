@@ -173,14 +173,21 @@ def status():
     # Store stats regardless of proxy state.
     try:
         from sieve.store import MemoryStore
+        from sieve.progression import detect_phase
         ms = MemoryStore(config.store)
         if ms.db_path.exists():
             ms.open()
             if ms.is_initialized():
                 s = ms.stats()
+                current_facts = ms.count_current_facts()
+                phase = detect_phase(current_facts, config.progression)
                 console.print(
                     f"  Store: [cyan]{s['facts_count']}[/] facts, "
                     f"[cyan]{s['entities_count']}[/] entities"
+                )
+                console.print(
+                    f"  Phase: [bold cyan]{phase.label}[/] "
+                    f"({current_facts} current facts, keeping {phase.turns} turns)"
                 )
             ms.close()
         else:
@@ -1210,9 +1217,12 @@ def demo(wait_for_write: bool, max_wait: float):
             text = raw[:240] if raw.strip() else "[dim](no visible content — check model output)[/]"
             rounds = r.headers.get("X-Sieve-Rounds", "0")
             proxy_us = r.headers.get("X-Sieve-Proxy-Us", "?")
+            phase_name = r.headers.get("X-Sieve-Phase", "?")
+            fact_ct = r.headers.get("X-Sieve-Fact-Count", "?")
+            phase_tag = f"[{phase_name}: {fact_ct} facts]"
             console.print(
                 f"        [green]→[/] {text}  "
-                f"[dim](recall rounds: {rounds}, proxy_us: {proxy_us})[/]"
+                f"[dim]{phase_tag} (recall rounds: {rounds}, proxy_us: {proxy_us})[/]"
             )
         except Exception as exc:
             console.print(f"        [red]error:[/] {exc}")

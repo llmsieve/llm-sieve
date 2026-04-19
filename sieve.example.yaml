@@ -38,6 +38,21 @@ pipeline:
   core_facts_size: 30
   context_format: auto
 
+# Progressive activation — Sieve picks one of three phases per request
+# based on the number of current facts in the store so the proxy works
+# correctly from message 1, not just after the store matures:
+#   OBSERVE    (facts < phase_1_threshold): keep observe_turns turns
+#   ACCUMULATE (< phase_2_threshold):       keep accumulate_turns turns
+#   ACTIVATE   (>= phase_2_threshold):      keep activate_turns turns
+# The phase is logged per request and exposed as X-Sieve-Phase on
+# response headers. See sieve/progression.py for the decision logic.
+progression:
+  phase_1_threshold: 20
+  phase_2_threshold: 50
+  observe_turns: 8
+  accumulate_turns: 4
+  activate_turns: 2
+
 # Profile owner — pins canonical identity into writer S2 prompt and is
 # used by the ghost-fact validator. When empty (the default), the writer
 # falls back to generic "user" attribution. Set both name and aliases to
