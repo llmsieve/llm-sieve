@@ -36,6 +36,9 @@ theme:
     - search.suggest
     - search.highlight
     - content.code.copy
+    # Fold the per-page table of contents into the left navigation
+    # instead of showing it as a separate right-hand column.
+    - toc.integrate
 
 extra_css:
   - stylesheets/custom.css

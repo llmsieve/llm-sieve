@@ -99,7 +99,19 @@ curl http://127.0.0.1:11435/api/chat \
 
 **Warm operation.** Once the store has content, tool schemas and repeated instructions start being stripped, relevant facts start being injected on demand, and absence-probe questions begin being refused rather than fabricated.
 
-**Per-turn diagnostics.** Sieve adds response headers to every turn — `X-Sieve-Rounds`, `X-Sieve-Proxy-Us`, and a few others — which are safe to log if you want to watch what the proxy is doing.
+**Per-turn diagnostics.** Sieve adds response headers to every turn — `X-Sieve-Rounds`, `X-Sieve-Proxy-Us`, `X-Sieve-Inbound-Tokens`, `X-Sieve-Outbound-Tokens` — which are safe to log if you want to watch what the proxy is doing.
+
+## Verify it works on your hardware
+
+Run the built-in benchmark:
+
+```bash
+sieve benchmark
+```
+
+This drives a 15-message scripted conversation through the proxy and prints a per-turn table plus overall totals — inbound vs outbound tokens, facts learned per turn, response time, and whether the absence-signal layer fires on a trap query. The prompts do not depend on the model knowing specific facts, so it works with any Ollama or OpenAI-compatible endpoint `sieve.yaml` is pointed at.
+
+The wizard offers to run it for you at the end of `sieve init --wizard`.
 
 ## Next steps
 

@@ -14,6 +14,7 @@ For a guided walkthrough use [Getting started](getting-started.md); for conceptu
 | [`sieve restart`](#sieve-restart) | Stop and start in one step                          |
 | [`sieve status`](#sieve-status) | Show proxy + store state                              |
 | [`sieve demo`](#sieve-demo)   | Scripted 6-message demo against a running proxy         |
+| [`sieve benchmark`](#sieve-benchmark) | Reproducible 15-message benchmark + summary    |
 | [`sieve uninstall`](#sieve-uninstall) | Remove Sieve (soft by default)                  |
 
 Subcommand groups:
@@ -89,6 +90,19 @@ sieve restart --port 11500 --verbose
 ## `sieve status`
 
 Prints the running state, listen address, and high-level store statistics (fact count, entity count). If the proxy is not running, shows the "start Sieve with" hint.
+
+## `sieve benchmark`
+
+Reproducible proof that anyone can run on their own hardware. Drives a 15-message scripted conversation through the proxy and reports per-message inbound/outbound tokens, facts learned, response time, and whether the absence-signal layer fires on a trap query about something that was never introduced.
+
+Flags:
+
+- `-c, --config PATH` — alternate sieve.yaml
+- `--model NAME` — override the model (defaults to `provider.default_model`)
+
+Requires the proxy to be running: start it with [`sieve start`](#sieve-start) in another terminal first. The benchmark works against any OpenAI-compatible or Ollama-compatible model — the prompts do not depend on the model knowing specific facts.
+
+At the end of [`sieve init --wizard`](#sieve-init), Sieve offers to run the benchmark for you so you can verify the reduction on your machine before wiring anything up.
 
 ## `sieve demo`
 
