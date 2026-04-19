@@ -9,33 +9,25 @@ docs_dir: docs
 
 theme:
   name: material
+  custom_dir: docs/overrides
   logo: assets/sieve-icon.svg
   favicon: assets/sieve-icon-favicon.svg
   font:
     text: Inter
     code: JetBrains Mono
   palette:
-    - media: "(prefers-color-scheme)"
-      scheme: slate
-      primary: teal
-      accent: teal
-      toggle:
-        icon: material/brightness-auto
-        name: Switch to light mode
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+    - scheme: slate
       primary: teal
       accent: teal
       toggle:
         icon: material/brightness-7
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+        name: Switch to light mode
+    - scheme: default
       primary: teal
       accent: teal
       toggle:
         icon: material/brightness-4
-        name: Switch to system preference
+        name: Switch to dark mode
   features:
     - navigation.instant
     - navigation.instant.progress
@@ -51,6 +43,9 @@ theme:
     - content.code.copy
     - content.code.annotate
     - content.action.edit
+
+extra_css:
+  - stylesheets/custom.css
 
 nav:
   - Home: index.md

@@ -1,0 +1,37 @@
+:root {
+  --md-primary-fg-color: #0D9488;
+  --md-primary-bg-color: #ffffff;
+  --md-accent-fg-color: #0D9488;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #262a35;
+  --md-default-fg-color: #DCDCE0;
+  --md-code-bg-color: #2e3240;
+  --md-typeset-color: #DCDCE0;
+}
+
+/* Match website fonts */
+:root {
+  --md-text-font: "Inter";
+  --md-code-font: "JetBrains Mono";
+}
+
+/* Teal accent for links and highlights */
+.md-typeset a {
+  color: #0D9488;
+}
+.md-typeset a:hover {
+  color: #14b8a6;
+}
+
+/* Nav header branding */
+.md-header {
+  background-color: #262a35;
+}
+
+/* Code blocks match terminal style */
+.md-typeset code {
+  background-color: #2e3240;
+  color: #DCDCE0;
+}
