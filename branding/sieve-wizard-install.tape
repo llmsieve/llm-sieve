@@ -30,7 +30,11 @@ Sleep 1200ms
 Enter
 Sleep 3500ms
 
-# Step 3 — model picker. Accept default (first model in the list).
+# Step 3 — model picker. Pick qwen3:14b (position 24 in this machine's
+# Ollama list). If you re-render on a different machine, update the
+# number to whatever position your preferred model occupies — or just
+# press Enter to accept the default.
+Type "24"
 Enter
 Sleep 1200ms
 
@@ -58,15 +62,10 @@ Type "n"
 Enter
 Sleep 1800ms
 
-# Silent tweaks so the GIF stays brisk and we don't collide with any
-# dev server already bound to the default port on the recording machine.
+# The wizard wrote the port we typed (11437), and picked qwen3:14b as
+# the model, so no post-wizard config tweaks are needed. Just clear the
+# screen so `sieve start` and `sieve demo` below read cleanly.
 Hide
-Type "sieve config set provider.default_model qwen3:14b"
-Enter
-Sleep 600ms
-Type "sieve config set listen.port 11437"
-Enter
-Sleep 600ms
 Type "clear"
 Enter
 Sleep 400ms
