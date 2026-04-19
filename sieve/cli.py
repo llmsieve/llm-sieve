@@ -291,6 +291,123 @@ def store_status(config_path: str | None):
     console.print(f"  Sessions: {s['sessions_count']}")
 
 
+# --- Config subcommands ---
+
+@cli.group()
+def config():
+    """Runtime configuration management."""
+    pass
+
+
+@config.command("show")
+def config_show():
+    """Display the current configuration."""
+    from rich.table import Table
+    from sieve import cli_config as cc
+
+    cfg = RecallConfig.load(cc.current_config_path())
+    diffs = {p for (p, _, _) in cc.diff_from_defaults(cfg)}
+
+    # Flatten the dataclass for a row-by-row table.
+    rows: list[tuple[str, str]] = []
+    from dataclasses import fields, is_dataclass
+
+    def walk(prefix, obj):
+        if is_dataclass(obj):
+            for f in fields(obj):
+                walk(f"{prefix}.{f.name}" if prefix else f.name, getattr(obj, f.name))
+        else:
+            rows.append((prefix, str(obj)))
+
+    walk("", cfg)
+
+    table = Table(title=f"Sieve config — {cc.current_config_path()}", show_lines=False)
+    table.add_column("Key")
+    table.add_column("Value")
+    table.add_column("")
+    for key, value in rows:
+        marker = "[bold yellow]• non-default[/]" if key in diffs else ""
+        style = "yellow" if key in diffs else None
+        table.add_row(key, value, marker, style=style)
+    console.print(table)
+
+
+@config.command("set")
+@click.argument("key")
+@click.argument("value")
+def config_set(key: str, value: str):
+    """Set a config option. Example: sieve config set listen.port 11500."""
+    from sieve import cli_config as cc
+
+    data = cc.load_raw()
+    try:
+        cc.set_path(data, key, value)
+        cc.validate_raw(data)
+    except ValueError as exc:
+        console.print(f"[bold red]Invalid config update:[/] {exc}")
+        sys.exit(2)
+
+    cc.write_raw(data)
+    console.print(f"[green]Set[/] [cyan]{key}[/] = [cyan]{value}[/]")
+    console.print("[dim]Restart Sieve to apply the change.[/]")
+
+
+@config.command("reset")
+def config_reset():
+    """Reset config to defaults (preserves provider URL and store path)."""
+    from sieve import cli_config as cc
+
+    current = cc.load_raw()
+    preserved_url = (current.get("provider") or {}).get("base_url")
+    preserved_store = (current.get("store") or {}).get("path")
+
+    console.print(
+        "[yellow]This will reset all config options to their defaults.[/]"
+    )
+    click.confirm("Continue?", abort=True)
+
+    # Load a fresh defaults dict from RecallConfig().
+    defaults_obj = RecallConfig()
+    new: dict = {
+        "listen": {"host": defaults_obj.listen.host, "port": defaults_obj.listen.port},
+        "provider": {
+            "type": defaults_obj.provider.type,
+            "base_url": preserved_url or defaults_obj.provider.base_url,
+            "default_model": defaults_obj.provider.default_model,
+        },
+        "embeddings": {"provider": defaults_obj.embeddings.provider},
+        "store": {"path": preserved_store or defaults_obj.store.path},
+    }
+    cc.write_raw(new)
+    console.print("[bold green]Config reset to defaults.[/]")
+
+
+@config.command("edit")
+def config_edit():
+    """Open the config file in $EDITOR and validate after save."""
+    from sieve import cli_config as cc
+
+    cfg_path = cc.current_config_path()
+    before = cfg_path.read_text() if cfg_path.exists() else ""
+
+    # Click.edit writes to a tempfile when filename is passed; simpler path:
+    # pass the real config file so the editor mutates it in place.
+    click.edit(filename=str(cfg_path), extension=".yaml")
+
+    # Validate
+    try:
+        import yaml as _yaml
+        raw = _yaml.safe_load(cfg_path.read_text()) or {}
+        cc.validate_raw(raw)
+    except Exception as exc:
+        # Roll back
+        cfg_path.write_text(before)
+        console.print(f"[bold red]Invalid YAML — rolled back:[/] {exc}")
+        sys.exit(2)
+
+    console.print("[green]Config saved.[/]")
+
+
 # --- Backup subcommands ---
 
 @cli.group()
