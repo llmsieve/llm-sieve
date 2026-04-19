@@ -802,6 +802,7 @@ def backup_create(config_path: str | None, output: str | None):
 @click.option("--config", "-c", "config_path", default=None, help="Path to sieve.yaml")
 def backup_list(config_path: str | None):
     """List available backups."""
+    from rich.table import Table
     from sieve.backup import list_backups
     from sieve.store import MemoryStore
 
@@ -813,11 +814,16 @@ def backup_list(config_path: str | None):
         console.print("[dim]No backups found.[/]")
         return
 
-    console.print(f"[bold green]{len(backups)} backup(s) found[/]")
+    t = Table(title=f"Backups ({len(backups)})")
+    t.add_column("Timestamp")
+    t.add_column("Size", justify="right")
+    t.add_column("Checksum")
+    t.add_column("Path", overflow="fold")
     for b in backups:
         size_kb = b["size_bytes"] / 1024
-        status = "[green]OK[/green]" if b["checksum_valid"] else "[yellow]unverified[/yellow]"
-        console.print(f"  {b['timestamp']}  {size_kb:.1f} KB  {status}  {b['id']}")
+        status = "[green]OK[/]" if b["checksum_valid"] else "[yellow]unverified[/]"
+        t.add_row(b["timestamp"], f"{size_kb:.1f} KB", status, b["path"])
+    console.print(t)
 
 
 @backup.command("restore")
