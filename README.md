@@ -69,6 +69,22 @@ Every request through the proxy passes through a five-step pipeline:
 
 Architecture deep-dive: [llmsieve.dev](https://llmsieve.dev).
 
+## How Sieve fits in the landscape
+
+Several excellent projects address different facets of the context-and-memory problem. Sieve is positioned alongside them, not against them.
+
+> **Most memory systems solve storage. Sieve solves delivery.**
+
+| Approach | What it does well | Integration | Sieve adds |
+|---|---|---|---|
+| Agent + raw context | Simple, no setup | N/A | Reduces bloat without changing the agent |
+| Agent + compaction | Keeps context manageable | Built-in | More precise retrieval vs crude truncation |
+| RAG systems | Document retrieval | Requires SDK integration | Transparent proxy, no code changes |
+| Letta (MemGPT) | Virtual context management | Requires SDK | Drop-in proxy, works alongside |
+| **Sieve** | Token reduction + memory | Transparent proxy | — |
+
+Sieve is complementary. It works alongside any of these approaches — reducing what gets sent to the model regardless of how the context was assembled. Better memory + leaner delivery = better results.
+
 ## Demo mode
 
 With the proxy running, open another terminal:
