@@ -407,13 +407,86 @@ def store_migrate(dest_path: str, config_path: str | None):
         sys.exit(1)
 
 
+def _run_wizard_flow() -> None:
+    """Drive the interactive wizard against real stdin / httpx / sockets.
+
+    Split out so tests can stub this function wholesale and verify the
+    --wizard flag routes correctly.
+    """
+    import click as _click
+    import httpx
+
+    from sieve.cli_wizard import (
+        WizardContext,
+        apply_wizard_answers,
+        run_wizard,
+    )
+
+    class _ClickPrompter:
+        def ask(self, q: str, default: str | None = None) -> str:
+            return _click.prompt(q, default=default if default is not None else "", show_default=bool(default))
+        def confirm(self, q: str, default: bool = True) -> bool:
+            return _click.confirm(q, default=default)
+
+    class _HttpxProbe:
+        def check(self, url: str) -> tuple[bool, list[str]]:
+            try:
+                r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=3.0)
+                if r.status_code == 200:
+                    data = r.json() or {}
+                    models = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+                    return True, models
+                return False, []
+            except Exception:
+                return False, []
+
+    def _download() -> None:
+        console.print("Downloading embedding model (BAAI/bge-small-en-v1.5, ~50MB)...")
+        from fastembed import TextEmbedding
+        _ = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        console.print("[green]Embedding model ready.[/]")
+
+    ctx = WizardContext(
+        prompter=_ClickPrompter(),
+        probe=_HttpxProbe(),
+        download_model=_download,
+    )
+    answers = run_wizard(ctx)
+    if not answers.confirmed:
+        console.print("[yellow]Wizard cancelled — no changes made.[/]")
+        return
+
+    _download()
+    apply_wizard_answers(answers)
+
+    # Initialise the encrypted store at the chosen location.
+    from sieve.store import MemoryStore
+    from sieve.config import StoreConfig
+    ms = MemoryStore(StoreConfig(path=str(answers.store_path)))
+    if not ms.db_path.exists():
+        ms.open()
+        ms.init_schema()
+        ms.close()
+        console.print(f"[green]Initialised encrypted store at[/] [cyan]{ms.db_path}[/]")
+
+    console.print("[bold green]Wizard complete.[/] Start with [cyan]sieve start[/].")
+
+
 @cli.command()
 @click.option("--provider", default=None, help="LLM provider base URL (e.g. http://localhost:11434)")
 @click.option("--force", is_flag=True, help="Reinitialise even if ~/.sieve already exists")
-def init(provider: str | None, force: bool):
+@click.option("--wizard", is_flag=True, help="Interactive guided setup")
+def init(provider: str | None, force: bool, wizard: bool):
     """Initialise Sieve — creates ~/.sieve/, downloads the embedding model,
     writes a default config, and initialises the encrypted memory store.
+
+    Default mode is lazy (zero prompts, all defaults). Pass --wizard for
+    guided interactive setup.
     """
+    if wizard:
+        _run_wizard_flow()
+        return
+
     _setup_logging(verbose=False)
 
     cfg_path = SIEVE_DIR / "sieve.yaml"
