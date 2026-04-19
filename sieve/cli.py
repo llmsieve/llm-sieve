@@ -1120,7 +1120,21 @@ store:
 
 
 @cli.command()
-def demo():
+@click.option(
+    "--wait-for-write/--no-wait-for-write",
+    default=True,
+    help="Poll the store after each turn until the async writer has committed "
+    "the new fact(s) before sending the next turn. Prevents the demo from "
+    "racing ahead of fact extraction. Default: enabled.",
+)
+@click.option(
+    "--max-wait",
+    default=15.0,
+    type=float,
+    help="Maximum seconds to wait for the writer per turn (when "
+    "--wait-for-write is enabled). Falls through after this.",
+)
+def demo(wait_for_write: bool, max_wait: float):
     """Run a short scripted demo against a running Sieve proxy."""
     pid = _read_pid()
     if pid is None:
@@ -1130,6 +1144,7 @@ def demo():
         sys.exit(1)
 
     import httpx
+    import time
 
     try:
         config = RecallConfig.load()
@@ -1138,6 +1153,28 @@ def demo():
         sys.exit(1)
 
     base = f"http://127.0.0.1:{config.listen.port}"
+
+    # Open the store read-only so we can poll fact counts between turns.
+    # `sieve demo` assumes the proxy is already running against this store,
+    # so both readers can share the DB file safely.
+    from sieve.store import MemoryStore
+    ms: MemoryStore | None = None
+    if wait_for_write:
+        try:
+            ms = MemoryStore(config.store)
+            ms.open()
+        except Exception as exc:
+            console.print(f"[dim]store poll disabled ({exc})[/]")
+            ms = None
+
+    def fact_count() -> int:
+        if ms is None:
+            return 0
+        try:
+            return int(ms.stats().get("facts_count", 0))
+        except Exception:
+            return 0
+
     messages = [
         "Hi, I'm Casey. I work as a landscape architect.",
         "My favourite project so far is the riverside park in Bristol.",
@@ -1147,8 +1184,13 @@ def demo():
         "Do you remember where Pat works?",  # absence-signal trap
     ]
 
+    # Phases 1–3 add new facts; 4–5 query existing facts; 6 is the trap.
+    # Only wait for the writer after phases that should produce new facts.
+    expect_new_fact = [True, True, True, False, False, False]
+
     console.print("[bold]Sieve demo[/] — 6 messages through the proxy:\n")
     for i, msg in enumerate(messages, 1):
+        before = fact_count()
         console.print(f"[dim]turn {i}:[/] [cyan]{msg}[/]")
         payload = {
             "model": config.provider.default_model,
@@ -1159,7 +1201,13 @@ def demo():
             r = httpx.post(f"{base}/api/chat", json=payload, timeout=60.0)
             r.raise_for_status()
             data = r.json()
-            text = (data.get("message") or {}).get("content", "")[:240]
+            raw = (data.get("message") or {}).get("content", "") or ""
+            # qwen3 emits reasoning inside <think>…</think>; strip for display
+            # so an all-reasoning turn doesn't render as an empty line.
+            if "<think>" in raw and "</think>" in raw:
+                import re
+                raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            text = raw[:240] if raw.strip() else "[dim](no visible content — check model output)[/]"
             rounds = r.headers.get("X-Sieve-Rounds", "0")
             proxy_us = r.headers.get("X-Sieve-Proxy-Us", "?")
             console.print(
@@ -1168,7 +1216,18 @@ def demo():
             )
         except Exception as exc:
             console.print(f"        [red]error:[/] {exc}")
+
+        # Wait for the async writer to commit before the next turn so
+        # later retrievals see the fact. Only waits on turns that should
+        # produce new facts; queries (turns 4–6) run back-to-back.
+        if wait_for_write and ms is not None and expect_new_fact[i - 1] and i < len(messages):
+            deadline = time.monotonic() + max_wait
+            while time.monotonic() < deadline and fact_count() <= before:
+                time.sleep(0.3)
         console.print()
+
+    if ms is not None:
+        ms.close()
 
     console.print(
         "[dim]Check [cyan]sieve status[/] to see how many facts Sieve learned.[/]"

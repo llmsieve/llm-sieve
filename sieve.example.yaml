@@ -38,13 +38,14 @@ pipeline:
   core_facts_size: 30
   context_format: auto
 
-# Profile owner — pins canonical identity into writer S2 prompt
-# and used by the ghost-fact validator. Change both name and aliases
-# when running against a different conversation subject.
+# Profile owner — pins canonical identity into writer S2 prompt and is
+# used by the ghost-fact validator. When empty (the default), the writer
+# falls back to generic "user" attribution. Set both name and aliases to
+# the actual person whose conversation Sieve is running against so the
+# writer can resolve first-person pronouns correctly.
 profile_owner:
-  name: "Jamie Rivera"
+  name: ""
   aliases:
-    - "Jamie"
     - "I"
     - "me"
     - "the user"

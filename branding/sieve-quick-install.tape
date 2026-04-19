@@ -53,7 +53,7 @@ Sleep 3500ms
 # the absence-signal path working on a trap query.
 Type "sieve demo"
 Enter
-Sleep 90000ms
+Sleep 130000ms
 
 # Peek at what Sieve learned.
 Type "sieve status"

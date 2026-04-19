@@ -79,7 +79,7 @@ Sleep 3500ms
 # Run the demo.
 Type "sieve demo"
 Enter
-Sleep 90000ms
+Sleep 130000ms
 
 # Inspect what the store learned.
 Type "sieve store stats"
