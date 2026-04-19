@@ -1,37 +1,77 @@
-:root {
-  --md-primary-fg-color: #0D9488;
-  --md-primary-bg-color: #ffffff;
-  --md-accent-fg-color: #0D9488;
-}
-
+/* ===== Brand colours ===== */
 [data-md-color-scheme="slate"] {
   --md-default-bg-color: #262a35;
+  --md-default-fg-color--light: #ABABBA;
   --md-default-fg-color: #DCDCE0;
+  --md-default-fg-color--lightest: #7E7E90;
   --md-code-bg-color: #2e3240;
+  --md-code-fg-color: #DCDCE0;
   --md-typeset-color: #DCDCE0;
+  --md-typeset-a-color: #0D9488;
+  --md-primary-fg-color: #1e2230;
+  --md-primary-bg-color: #DCDCE0;
+  --md-accent-fg-color: #0D9488;
+  --md-footer-bg-color: #1e2230;
+  --md-footer-fg-color: #ABABBA;
 }
 
-/* Match website fonts */
-:root {
-  --md-text-font: "Inter";
-  --md-code-font: "JetBrains Mono";
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #262a35;
+  --md-primary-bg-color: #ffffff;
+  --md-accent-fg-color: #0D9488;
+  --md-typeset-a-color: #0D9488;
 }
 
-/* Teal accent for links and highlights */
-.md-typeset a {
-  color: #0D9488;
+/* Header bar — dark navy, not bright teal */
+.md-header {
+  background-color: var(--md-primary-fg-color);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
+
+/* Tabs bar under header */
+.md-tabs {
+  background-color: var(--md-primary-fg-color);
+}
+
+/* Inline SVG logo — inherits header text color via currentColor */
+.md-header__logo-svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--md-primary-bg-color);
+}
+
+/* Code blocks */
+.md-typeset code {
+  border-radius: 4px;
+}
+
+/* Links — teal accent */
 .md-typeset a:hover {
   color: #14b8a6;
 }
 
-/* Nav header branding */
-.md-header {
-  background-color: #262a35;
+/* Search bar */
+[data-md-color-scheme="slate"] .md-search__input {
+  background-color: #2e3240;
 }
 
-/* Code blocks match terminal style */
-.md-typeset code {
+/* Navigation sidebar */
+[data-md-color-scheme="slate"] .md-sidebar {
+  border-right-color: #3d4255;
+}
+
+/* Table of contents */
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: #0D9488;
+}
+
+/* Admonitions */
+[data-md-color-scheme="slate"] .md-typeset .admonition {
+  border-color: #3d4255;
   background-color: #2e3240;
-  color: #DCDCE0;
+}
+
+/* Footer */
+.md-footer {
+  background-color: var(--md-footer-bg-color);
 }
