@@ -136,15 +136,21 @@ Your store and config in `~/.sieve/` survive upgrades. The store schema is versi
 
 ## Uninstalling
 
+Sieve ships two uninstall modes via the CLI:
+
 ```bash
-pip uninstall llm-sieve
+sieve uninstall              # soft: preserves ~/.sieve/
+sieve uninstall --hard       # requires typing 'DELETE', removes ~/.sieve/
 ```
 
-Your data lives under `~/.sieve/`. Nothing is removed from there by `pip uninstall` — remove it yourself if you want a clean slate:
+Both print the `pip uninstall llm-sieve` command to run afterwards — Sieve cannot remove the Python package it's currently running from.
+
+If you want to remove Sieve manually instead, the steps are:
 
 ```bash
-rm -rf ~/.sieve
-rm -rf ~/.cache/fastembed
+pip uninstall llm-sieve
+rm -rf ~/.sieve              # only if you want to drop learned data
+rm -rf ~/.cache/fastembed    # optional — embedding model cache
 ```
 
 The second command also removes the cached embedding model; you only need that if you want to reclaim the disk.

@@ -28,7 +28,7 @@ You should see `sieve, version 1.0.0` (or later).
 sieve init
 ```
 
-`sieve init` is a one-shot wizard. It:
+`sieve init` is a one-shot, zero-prompt setup. It:
 
 1. **Detects your LLM provider.** If Ollama is reachable on `127.0.0.1:11434`, it is auto-selected. Otherwise you are prompted for a base URL.
 2. **Health-checks the provider.** A non-fatal warning is printed if the endpoint does not respond; you can fix the URL in the config later.
@@ -36,7 +36,15 @@ sieve init
 4. **Writes `~/.sieve/sieve.yaml`.** Based on the packaged `sieve.example.yaml`, with your provider URL substituted.
 5. **Creates the encrypted store.** A SQLCipher database at `~/.sieve/memory.db` with its keyfile at `~/.sieve/.sieve_key`.
 
-When the wizard prints **Ready!**, you are done.
+When it prints **Ready!**, you are done.
+
+### Prefer to be asked about every option?
+
+```bash
+sieve init --wizard
+```
+
+Drops you into an interactive six-step setup covering provider choice (Ollama / OpenAI / Anthropic / custom), model selection, listen port, encryption (generated key or custom passphrase), and store location. Every choice defaults to the same value `sieve init` would have picked, so pressing Return through the wizard is equivalent to the lazy path. See the [CLI reference](cli-reference.md#sieve-init) for the full flow.
 
 ## Step 3 — Start the proxy
 

@@ -15,6 +15,20 @@ The shipping example — with commentary on every option — is [`sieve.example.
 
 The first match wins; nothing is merged.
 
+## Editing via the CLI
+
+You rarely need to open `sieve.yaml` in a text editor. The `sieve config` commands cover the common cases:
+
+```bash
+sieve config show                                    # current values (non-default highlighted)
+sieve config set listen.port 11436                   # coerced + validated before write
+sieve config set provider.base_url http://host:PORT
+sieve config edit                                    # open in $EDITOR, rolls back invalid YAML
+sieve config reset                                   # ship defaults; preserves provider URL + store path
+```
+
+`sieve config set` whitelists the keys that can be set this way — see the [CLI reference](cli-reference.md#config) for the full list and validation rules.
+
 ## Reference
 
 Every top-level section below maps to a block in `sieve.yaml`. Defaults shown are what `sieve init` writes.

@@ -45,6 +45,7 @@ nav:
   - Getting started: getting-started.md
   - Installation: installation.md
   - Configuration: configuration.md
+  - CLI reference: cli-reference.md
 
 markdown_extensions:
   - admonition
