@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Sieve icon">
+  <title>Sieve</title>
+  <desc>A wide input narrowing through a filter to a single refined point.</desc>
+  <!-- Simplified 3-particle input — reads at 16px -->
+  <circle cx="16" cy="10" r="3" fill="#0a0a0a"/>
+  <circle cx="32" cy="10" r="3" fill="#0a0a0a"/>
+  <circle cx="48" cy="10" r="3" fill="#0a0a0a"/>
+  <!-- Funnel, thicker strokes -->
+  <path d="M8 22 L28 46" stroke="#0a0a0a" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M56 22 L36 46" stroke="#0a0a0a" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <!-- Output dot, larger and more visible -->
+  <circle cx="32" cy="56" r="4" fill="#0D9488"/>
+</svg>

@@ -56,9 +56,9 @@ class RecallHandler:
         self._retriever = retriever
         self._config = config
         self._tool_registry = tool_registry
-        # Cycle 28: SlotRetriever is optional. When schema_v2 is on, the
-        # tool-call retrieval path consults it before falling back to the
-        # legacy vector retriever.
+        # SlotRetriever is optional. When schema_v2 is on, the tool-call
+        # retrieval path consults it before falling back to the legacy
+        # vector retriever.
         self._slot_retriever = slot_retriever
 
     async def handle_chat(
@@ -137,10 +137,10 @@ class RecallHandler:
                 logger.info("  recall(query=%r, scope=%r)", query_text[:80], scope)
                 ctx = await self._retriever.retrieve(query_text)
 
-                # Cycle 28 schema_v2: try SlotRetriever on the tool-call
-                # path too. The pre-populate path does this already, but
-                # tool-calling LLMs (qwen3.5:9b and up) prefer to call the
-                # recall tool, so most real queries land here.
+                # schema_v2: try SlotRetriever on the tool-call path
+                # too. The pre-populate path does this already, but
+                # tool-calling LLMs (qwen3.5:9b and up) prefer to call
+                # the recall tool, so most real queries land here.
                 tool_text = ctx.text
                 ablation_cfg = getattr(self._config, "ablation", None)
                 if (ablation_cfg is not None
@@ -175,7 +175,7 @@ class RecallHandler:
                     except Exception as exc:
                         logger.warning("schema_v2 path failed (recall tool): %s", exc)
 
-                # Cycle 19 Layer 1+2 — Absence signalling and closed-world framing
+                # Layer 1+2 — Absence signalling and closed-world framing
                 # on the tool result. Use the original user query (not the LLM's
                 # rewritten recall query) so absence signals reflect what the
                 # user actually asked about.
@@ -410,7 +410,7 @@ def _merge_openai_chunk(accumulated: dict, chunk: dict) -> dict:
 # ─── Tool call extraction ────────────��────────────────────────────────────────
 
 def _last_user_query(messages: list[dict]) -> str | None:
-    """Cycle 19: return the most recent user message text from a chat list."""
+    """Return the most recent user message text from a chat list."""
     for m in reversed(messages):
         if not isinstance(m, dict):
             continue

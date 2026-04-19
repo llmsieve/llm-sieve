@@ -1,4 +1,4 @@
-"""Cycle 27 T7/T8/T9: SlotRetriever — deterministic slot-based retrieval.
+"""SlotRetriever — deterministic slot-based retrieval.
 
 Complements the legacy ContextRetriever. Routes a query via
 query_classifier_v2, then dispatches to one of four paths:
@@ -72,7 +72,7 @@ def _canonical_subject(name: str) -> str:
 
 
 class SlotRetriever:
-    """Deterministic slot-based retrieval over the cycle27 v2 schema.
+    """Deterministic slot-based retrieval over the v2 schema.
 
     Construct with a MemoryStore and the profile owner's name. Call
     retrieve(query) to get a SlotRetrievalResult.
@@ -111,12 +111,13 @@ class SlotRetriever:
 
     # ── T7 slot_lookup ─────────────────────────────────────────────────
 
-    # Cycle 28: QueryClassifierV2 uses V2_SLOT_PREDICATES (residence_city,
-    # monthly_mortgage, ...) but fact_classifier_v2 writes a smaller more
-    # general set (residence, finances, ...). The alias map lets a single
-    # query-side predicate probe several fact-side predicates in fallback
-    # order. On HIT, all matching rows are added as current_slots so the
-    # formatter can render the broader slot cluster.
+    # QueryClassifierV2 uses V2_SLOT_PREDICATES (residence_city,
+    # monthly_mortgage, ...) but fact_classifier_v2 writes a smaller
+    # more general set (residence, finances, ...). The alias map lets a
+    # single query-side predicate probe several fact-side predicates in
+    # fallback order. On HIT, all matching rows are added as
+    # current_slots so the formatter can render the broader slot
+    # cluster.
     _SLOT_ALIASES: dict[str, list[str]] = {
         "residence_city": ["residence_city", "residence", "location_change"],
         "residence": ["residence", "residence_city", "location_change"],
@@ -190,7 +191,7 @@ class SlotRetriever:
             candidate_slots += ["role", "employer"]
         if any(k in query_lc for k in ("living", "residence", "home", "move", "house")):
             candidate_slots += ["residence_city", "residence_address"]
-        if any(k in query_lc for k in ("relationship", "married", "tom", "spouse", "marriage")):
+        if any(k in query_lc for k in ("relationship", "married", "spouse", "marriage")):
             candidate_slots += ["marital_status"]
         if "salary" in query_lc or "income" in query_lc or "pay" in query_lc:
             candidate_slots += ["salary"]
@@ -227,10 +228,10 @@ class SlotRetriever:
         has enough to answer career-transition / given-circumstances
         questions.
 
-        For the cycle27 simulation queries (B2, B4), this covers:
-        - B4 "who in her network": relationships table gives reports_to,
+        For typical multi-hop queries, this covers:
+        - "who in her network": relationships table gives reports_to,
           manager, mentor, colleague edges.
-        - B2 "birthday gifts given her current situation": we return
+        - "birthday gifts given her current situation": we return
           has_child relationships + current employer/salary slots.
         """
         if not self._owner_subject:

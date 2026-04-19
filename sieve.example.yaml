@@ -40,11 +40,11 @@ pipeline:
 
 # Profile owner — pins canonical identity into writer S2 prompt
 # and used by the ghost-fact validator. Change both name and aliases
-# when running a different dataset (e.g. Bob Martinez evaluation).
+# when running against a different conversation subject.
 profile_owner:
-  name: "Mary Chen"
+  name: "Jamie Rivera"
   aliases:
-    - "Mary"
+    - "Jamie"
     - "I"
     - "me"
     - "the user"

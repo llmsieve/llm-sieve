@@ -120,9 +120,10 @@ class RequestMetrics:
     seed: int | None = None
     simulated_day: int | None = None
     category: str | None = None
-    # "direct_recall" (default) or "openclaw_recall" when the runner
-    # forwards through OpenClaw. Honours X-Validation-Path on the inbound
-    # request; baseline rows use the parallel label in metrics_proxy.py.
+    # "direct_recall" (default) or "agent_framework_recall" when the
+    # runner forwards through the agent framework. Honours
+    # X-Validation-Path on the inbound request; baseline rows use the
+    # parallel label in metrics_proxy.py.
     path_label: str = "direct_recall"
 
     # Timestamps

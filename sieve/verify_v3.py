@@ -15,7 +15,7 @@ Design summary (five decisions locked during brainstorming):
   Q4 — Continuation via assistant-prefill, empty-args call, ~200 tokens
   Q5 — Sentence-level splice (keep good, drop flagged, append continuation)
 
-This module reuses the cycle-20 claim-vs-store detector from
+This module reuses the claim-vs-store detector from
 src/verification.py (which already had TP=5, FP=0 on the targeted
 dataset). The v3 contribution is sentence-index tracking, the fabricated-
 relationship extractor, the asymmetric tool result, and the splice +
@@ -49,7 +49,7 @@ logger = logging.getLogger("recall.verify_v3")
 class V3FlaggedAttribute:
     """An attribute contradiction — goes into `user_facts` in the tool result.
 
-    Wraps a cycle-20 FlaggedClaim with the source sentence index so we can
+    Wraps a FlaggedClaim with the source sentence index so we can
     splice it out of the original response.
     """
     subject: str
@@ -99,7 +99,7 @@ def extract_attribute_contradictions(
 ) -> list[V3FlaggedAttribute]:
     """Extractor 1: attribute contradictions on known entities.
 
-    Delegates the hard work to the cycle-20 _detect_claim_contradictions
+    Delegates the hard work to the _detect_claim_contradictions
     pipeline (which already has the predicate patterns, normalisation, and
     store-triple matching), then projects each FlaggedClaim back onto a
     sentence index by walking the sentence list and finding the first
@@ -117,12 +117,12 @@ def extract_attribute_contradictions(
     out: list[V3FlaggedAttribute] = []
     used_indices: set[int] = set()
     for claim in flagged_claims:
-        # v3 veto: cycle-20 compares claimed vs stored object via strict
-        # string equality. That false-positives when the response says
-        # "Meridian Health" but the store fact says "at Meridian" (captured
-        # without the suffix). If the claimed value is a substring of any
-        # fact mentioning the subject, treat it as agreement, not
-        # contradiction.
+        # v3 veto: earlier iterations compared claimed vs stored object
+        # via strict string equality. That false-positives when the
+        # response says "Example Corp" but the store fact says "at
+        # Example" (captured without the suffix). If the claimed value
+        # is a substring of any fact mentioning the subject, treat it as
+        # agreement, not contradiction.
         if _claim_matches_any_stored_fact(claim, store):
             continue
         idx = _find_sentence_index(claim.sentence, sentences, used_indices)
@@ -148,19 +148,19 @@ def extract_attribute_contradictions(
 
 
 def _claim_matches_any_stored_fact(claim: FlaggedClaim, store: Any) -> bool:
-    """Substring-aware veto for cycle-20 false positives.
+    """Substring-aware veto for exact-match false positives.
 
-    The cycle-20 detector compares `claimed == stored_object` exactly, but
-    the response text and the store often have slightly different
-    surface forms ("Meridian Health" vs "Meridian"). If `claimed` is a
-    substring of any current fact mentioning the subject, or vice versa,
-    treat the claim as consistent with the store.
+    The attribute-correction detector compares `claimed == stored_object`
+    exactly, but the response text and the store often have slightly
+    different surface forms ("Example Corp" vs "Example"). If `claimed`
+    is a substring of any current fact mentioning the subject, or vice
+    versa, treat the claim as consistent with the store.
     """
     if store is None or getattr(store, "_conn", None) is None:
         return False
     lookup = "user" if claim.subject == "the_user" else claim.subject
     facts = _fetch_entity_facts(lookup, store)
-    if lookup.lower() == "mary":
+    if lookup.lower() == "jamie":
         facts = facts + _fetch_entity_facts("user", store)
     claimed_l = (claim.claimed or "").strip().lower()
     if not claimed_l:
@@ -169,13 +169,13 @@ def _claim_matches_any_stored_fact(claim: FlaggedClaim, store: Any) -> bool:
         cl = content.lower()
         if claimed_l in cl:
             return True
-        # Token-level containment for multi-word claims: "meridian health"
-        # matches a fact that says "at meridian" because "meridian" ⊆ both.
+        # Token-level containment for multi-word claims: "example corp"
+        # matches a fact that says "at example" because "example" ⊆ both.
         tokens = [t for t in claimed_l.split() if len(t) > 3]
         if tokens and any(t in cl for t in tokens):
             # Also require the fact to be predicate-relevant, not just
-            # mentioning any token. Narrow by asking the cycle-20 store
-            # pattern to produce at least one matching predicate triple.
+            # mentioning any token. Narrow by asking the store pattern
+            # to produce at least one matching predicate triple.
             from sieve.verification import _extract_store_triples
             for subj_h, key, obj in _extract_store_triples(content):
                 if key != claim.predicate:
@@ -189,12 +189,11 @@ def _consolidate_correction(subject: str, predicate: str, store: Any) -> str:
     """Merge all current stored facts about (subject, predicate) into one
     correction string.
 
-    Without this, the cycle-20 detector would hand us a single fact
-    ("Tom is a high school history teacher"), but the store often splits
-    related attributes across multiple rows ("Tom is a history teacher",
-    "Tom works at Brookline High"). The continuation model can't recover
-    the missing piece if we only feed it one fact — fix #2 from the smoke
-    test results.
+    Without this, the attribute-correction detector would hand us a
+    single fact ("Kim is a high school history teacher"), but the store
+    often splits related attributes across multiple rows ("Kim is a
+    history teacher", "Kim works at Brookline High"). The continuation
+    model can't recover the missing piece if we only feed it one fact.
 
     Strategy: fetch all current facts mentioning the subject, keep those
     whose content looks relevant to the predicate (simple keyword filter),
@@ -232,7 +231,7 @@ def _consolidate_correction(subject: str, predicate: str, store: Any) -> str:
         )):
             continue
         # Only keep facts that carry a positive predicate keyword. The old
-        # length bonus rewarded short-but-irrelevant facts like "Tom is a
+        # length bonus rewarded short-but-irrelevant facts like "Kim is a
         # carnivore" when the target predicate was job_role. Demanding at
         # least one keyword match eliminates that noise.
         if not keywords:
@@ -295,7 +294,7 @@ def _summarise_store_fact(fact_content: str) -> str:
     # as the pure fact value.
     for prefix in (
         "User's ", "the user's ", "User ", "the user ",
-        "Mary's ", "Mary ", "FACT: ", "Fact: ",
+        "Jamie's ", "Jamie ", "FACT: ", "Fact: ",
     ):
         if text.startswith(prefix):
             text = text[len(prefix):]
@@ -316,8 +315,8 @@ _REL_VOCAB = (
 )
 
 # Possessive fabrication pattern:
-#   "Mary's daughter Sophie", "Mary's cousin Lisa", "Mary's nanny Clara",
-#   "Tom's brother David". Anchored on a known entity via 's.
+#   "Jamie's daughter Sam", "Jamie's cousin Lisa", "Jamie's nanny Clara",
+#   "Kim's brother David". Anchored on a known entity via 's.
 _POSSESSIVE_FAB_RX = re.compile(
     r"\b(?P<anchor>[A-Z][a-zA-Z]+)'s\s+"
     r"(?P<rel>" + _REL_VOCAB + r")"
@@ -325,8 +324,8 @@ _POSSESSIVE_FAB_RX = re.compile(
 )
 
 # Active "has a" fabrication pattern:
-#   "Mary has a daughter named Sophie", "Mary has a golden retriever named Max",
-#   "Mary has a nanny Clara". Covers the construction the possessive rx misses.
+#   "Jamie has a daughter named Sam", "Jamie has a golden retriever named Max",
+#   "Jamie has a nanny Clara". Covers the construction the possessive rx misses.
 _HASA_FAB_RX = re.compile(
     r"\b(?P<anchor>[A-Z][a-zA-Z]+)\s+has\s+(?:a|an)\s+"
     r"(?P<rel>" + _REL_VOCAB + r")"
@@ -334,7 +333,7 @@ _HASA_FAB_RX = re.compile(
 )
 
 # Active fabrication pattern:
-#   "Derek manages Mary's team", "Lisa lives near Mary".
+#   "Derek manages Jamie's team", "Lisa lives near Jamie".
 #   Unknown proper noun + verb + known entity.
 _ACTIVE_FAB_RX = re.compile(
     r"\b(?P<unknown>[A-Z][a-zA-Z]+)\s+"
@@ -365,14 +364,14 @@ def extract_fabricated_relationships(
         """Does the store have a relationship of type `rel` anchored on `anchor`?"""
         rel_l = rel.lower()
         anchor_l = anchor.lower()
-        # Canonicalise the anchor: Mary / the user / user all map together.
-        user_aliases = {"mary", "mary chen", "user", "the_user"}
+        # Canonicalise the anchor: Jamie / the user / user all map together.
+        user_aliases = {"jamie", "jamie rivera", "user", "the_user"}
         is_user_anchor = anchor_l in user_aliases
         # Check against user_rels directly for user-anchored relationships.
         if is_user_anchor and rel_l in user_rels and user_rels[rel_l]:
             return True
         # For non-user anchors, fall back to a text search in the anchor's
-        # facts — e.g. "Tom's brother" lives in Tom's facts, not user_rels.
+        # facts — e.g. "Kim's brother" lives in Kim's facts, not user_rels.
         facts = _fetch_entity_facts(anchor, store)
         needle = f" {rel_l}"
         for f in facts:
@@ -511,7 +510,7 @@ def build_tool_result(
 
     Enrichment: when a subject has a flagged attribute on predicate X, we
     also include that subject's other covered predicates as bonus context.
-    The correction for "Tom is a lawyer" should carry BOTH "role=history
+    The correction for "Kim is a lawyer" should carry BOTH "role=history
     teacher" and "employer=Brookline High" so the model can produce a
     complete replacement sentence, not just the specific contradicted
     attribute. Bonus predicates are only filled if `store` is provided.
@@ -605,7 +604,7 @@ def splice_response(
 #   "user_data" (Shape C) — append the tool result as a {role:"user"}
 #       message whose content is ONLY the JSON tool result (no prose, no
 #       "please revise"). Always works mechanically because it's a plain
-#       user turn. The cycle-21 failure was the *prompt content* (corrective
+#       user turn. The earlier failure was the *prompt content* (corrective
 #       instructions), not the role=user structure.
 #
 # The smoke test on 3-5 queries will decide which shape is empirically

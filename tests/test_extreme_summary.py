@@ -1,4 +1,4 @@
-"""Unit tests for src.extreme_summary (Cycle 28 EXTREME narrative summary)."""
+"""Unit tests for src.extreme_summary (EXTREME narrative summary)."""
 from __future__ import annotations
 
 import pytest
@@ -32,10 +32,10 @@ def test_should_summarise_respects_flag() -> None:
 async def test_summarise_returns_text(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         url="http://127.0.0.1:11434/api/generate",
-        json={"response": "Mary Chen is a VP of Product at Meridian."},
+        json={"response": "Jamie Rivera is a VP of Product at Example."},
     )
     result = await summarise_async("a" * 50_000)
-    assert result == "Mary Chen is a VP of Product at Meridian."
+    assert result == "Jamie Rivera is a VP of Product at Example."
 
 
 @pytest.mark.asyncio
@@ -73,6 +73,6 @@ def test_format_summary_section_none_returns_empty() -> None:
 
 
 def test_format_summary_section_has_header() -> None:
-    out = format_summary_section("Mary is a VP.")
+    out = format_summary_section("Jamie is a VP.")
     assert out.startswith("[NARRATIVE SUMMARY]")
-    assert "Mary is a VP." in out
+    assert "Jamie is a VP." in out

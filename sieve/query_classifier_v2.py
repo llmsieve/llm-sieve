@@ -1,8 +1,8 @@
-"""Cycle 27 T6: keyword-based query classifier for SlotRetriever routing.
+"""Keyword-based query classifier for SlotRetriever routing.
 
 Classifies a natural-language query into one of:
     slot_lookup         — current value of a single slot
-                          ("what's Mary's current job", "where does she live")
+                          ("what's Jamie's current job", "where does she live")
     temporal_sequence   — values over time
                           ("how has X changed", "over the last few years")
     multi_hop           — requires joining facts about several entities
@@ -10,10 +10,10 @@ Classifies a natural-language query into one of:
     generic             — default; falls back to vector retrieval
 
 The classifier is intentionally simple: a small ruleset with conservative
-matches. Unknown queries route to generic — same behaviour as cycle26, so
-the fall-back never regresses.
+matches. Unknown queries route to generic, so the fall-back never
+regresses.
 
-Validated against the 10 cycle27 simulation queries in
+Validated against the 10 simulation queries in
 tests/test_query_classifier_v2.py.
 """
 from __future__ import annotations
@@ -98,7 +98,7 @@ _MULTI_HOP_PATTERNS = [
     r"\bwho could (?:help|support|advise)\b",
     r"\bprofessional network\b",
     r"\bwhat .* given .* (?:situation|circumstances|financial)\b",
-    r"\bgiven (?:her|his|their|mary'?s) current\b",
+    r"\bgiven (?:her|his|their|jamie'?s) current\b",
     r"\bwhat .* work (?:for|with)\b.*\b(?:given|considering)\b",
     r"\breasonably (?:commute|afford|manage)\b",
     r"\bshould .* consider\b",

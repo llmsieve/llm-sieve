@@ -269,7 +269,7 @@ class TestPipelineIntegration:
             assert max(system_indices) < min(user_indices)
 
 
-# ─── Cycle 9 — dedup + MMR helpers ────────────────────────────────────────────
+# ─── Dedup + MMR helpers ──────────────────────────────────────────────────────
 
 from sieve.retrieval import (
     _cosine,
@@ -299,7 +299,7 @@ class TestCosine:
 
 
 class TestPickFormat:
-    """Cycle 18: query-driven format dispatch."""
+    """Query-driven format dispatch."""
 
     def _pick(self, q: str) -> str:
         from sieve.retrieval import _pick_format
@@ -307,29 +307,29 @@ class TestPickFormat:
 
     # Should pick structured (temporal / progression queries)
     def test_career_path(self):
-        assert self._pick("walk me through Mary's career path") == "structured"
+        assert self._pick("walk me through Jamie's career path") == "structured"
 
     def test_over_time(self):
         assert self._pick("how has the user's role changed over time?") == "structured"
 
     def test_progression(self):
-        assert self._pick("what's the progression of Mary's job?") == "structured"
+        assert self._pick("what's the progression of Jamie's job?") == "structured"
 
     def test_history(self):
-        assert self._pick("tell me Mary's relationship history") == "structured"
+        assert self._pick("tell me Jamie's relationship history") == "structured"
 
     def test_used_to(self):
         assert self._pick("where did the user used to live?") == "structured"
 
     def test_walk_through(self):
-        assert self._pick("walk me through what happened with Tom") == "structured"
+        assert self._pick("walk me through what happened with Kim") == "structured"
 
     # Should pick flat (single-fact queries)
     def test_what_is_name(self):
         assert self._pick("what is the user's name?") == "flat"
 
     def test_where_lives(self):
-        assert self._pick("where does Mary live?") == "flat"
+        assert self._pick("where does Jamie live?") == "flat"
 
     def test_who_is_husband(self):
         assert self._pick("who is the user's husband?") == "flat"
@@ -482,7 +482,7 @@ class TestMmrRerank:
         assert _mmr_rerank([], {}, lam=0.7, k=5) == []
 
 
-# ── Cycle 26 Fix 2: _temporal_dedup ─────────────────────────────────────────
+# ── _temporal_dedup ──────────────────────────────────────────────────────────
 
 def _mk_fact(id_: str, content: str, created_at: str, confidence: float = 0.8) -> dict:
     return {
@@ -501,15 +501,15 @@ def test_temporal_dedup_empty_input():
 
 def test_temporal_dedup_single_fact_unchanged():
     from sieve.retrieval import _temporal_dedup
-    f = _mk_fact("a", "Mary lives in Beacon Hill condo", "2025-01-01")
+    f = _mk_fact("a", "Jamie lives in Beacon Hill condo", "2025-01-01")
     out = _temporal_dedup([f], {"a": [1.0, 0.0]}, {"a": {"e_mary"}})
     assert out == [f]
 
 
 def test_temporal_dedup_same_entity_high_similarity_newer_wins():
     from sieve.retrieval import _temporal_dedup
-    f_old = _mk_fact("old", "Mary lives in Beacon Hill condo with Tom", "2025-01-01")
-    f_new = _mk_fact("new", "Mary lives alone in Beacon Hill condo", "2025-06-01")
+    f_old = _mk_fact("old", "Jamie lives in Beacon Hill condo with Kim", "2025-01-01")
+    f_new = _mk_fact("new", "Jamie lives alone in Beacon Hill condo", "2025-06-01")
     embs = {"old": [1.0, 0.0], "new": [0.99, 0.01]}  # cos ≈ 0.995
     ent = {"old": {"e_mary", "e_tom"}, "new": {"e_mary"}}
     out = _temporal_dedup([f_old, f_new], embs, ent, similarity_threshold=0.85)
@@ -518,8 +518,8 @@ def test_temporal_dedup_same_entity_high_similarity_newer_wins():
 
 def test_temporal_dedup_same_entity_low_similarity_both_kept():
     from sieve.retrieval import _temporal_dedup
-    f1 = _mk_fact("condo", "Mary owns a condo in Beacon Hill", "2025-01-01")
-    f2 = _mk_fact("cabin", "Mary owns a cabin in Vermont", "2025-02-01")
+    f1 = _mk_fact("condo", "Jamie owns a condo in Beacon Hill", "2025-01-01")
+    f2 = _mk_fact("cabin", "Jamie owns a cabin in Vermont", "2025-02-01")
     embs = {"condo": [1.0, 0.0], "cabin": [0.2, 0.98]}  # cos ≈ 0.2
     ent = {"condo": {"e_mary"}, "cabin": {"e_mary"}}
     out = _temporal_dedup([f1, f2], embs, ent, similarity_threshold=0.85)
@@ -528,8 +528,8 @@ def test_temporal_dedup_same_entity_low_similarity_both_kept():
 
 def test_temporal_dedup_different_entities_high_similarity_both_kept():
     from sieve.retrieval import _temporal_dedup
-    f1 = _mk_fact("a", "Mary lives in Boston", "2025-01-01")
-    f2 = _mk_fact("b", "Tom lives in Boston", "2025-06-01")
+    f1 = _mk_fact("a", "Jamie lives in Boston", "2025-01-01")
+    f2 = _mk_fact("b", "Kim lives in Boston", "2025-06-01")
     embs = {"a": [1.0, 0.0], "b": [0.99, 0.01]}
     ent = {"a": {"e_mary"}, "b": {"e_tom"}}
     out = _temporal_dedup([f1, f2], embs, ent, similarity_threshold=0.85)
@@ -538,8 +538,8 @@ def test_temporal_dedup_different_entities_high_similarity_both_kept():
 
 def test_temporal_dedup_tie_on_timestamp_higher_confidence_wins():
     from sieve.retrieval import _temporal_dedup
-    f_low = _mk_fact("low", "Mary works at Nexus", "2025-01-01", confidence=0.5)
-    f_hi = _mk_fact("hi", "Mary is at Nexus Health", "2025-01-01", confidence=0.95)
+    f_low = _mk_fact("low", "Jamie works at Other", "2025-01-01", confidence=0.5)
+    f_hi = _mk_fact("hi", "Jamie is at Other Corp", "2025-01-01", confidence=0.95)
     embs = {"low": [1.0, 0.0], "hi": [0.99, 0.01]}
     ent = {"low": {"e_mary"}, "hi": {"e_mary"}}
     out = _temporal_dedup([f_low, f_hi], embs, ent, similarity_threshold=0.85)
@@ -548,8 +548,8 @@ def test_temporal_dedup_tie_on_timestamp_higher_confidence_wins():
 
 def test_temporal_dedup_tie_on_everything_stable_by_id():
     from sieve.retrieval import _temporal_dedup
-    f_a = _mk_fact("a", "Mary works at Nexus", "2025-01-01", confidence=0.8)
-    f_b = _mk_fact("b", "Mary works at Nexus", "2025-01-01", confidence=0.8)
+    f_a = _mk_fact("a", "Jamie works at Other", "2025-01-01", confidence=0.8)
+    f_b = _mk_fact("b", "Jamie works at Other", "2025-01-01", confidence=0.8)
     embs = {"a": [1.0, 0.0], "b": [1.0, 0.0]}
     ent = {"a": {"e_mary"}, "b": {"e_mary"}}
     out = _temporal_dedup([f_a, f_b], embs, ent, similarity_threshold=0.85)
@@ -557,7 +557,7 @@ def test_temporal_dedup_tie_on_everything_stable_by_id():
     assert [f["id"] for f in out] == ["a"]
 
 
-# ── Cycle 26 Task 18: _format_context_block max_tokens parameter ────────────
+# ── _format_context_block max_tokens parameter ──────────────────────────────
 
 def _make_fact_rows(n: int, words_per_fact: int = 15) -> list[dict]:
     rows = []
@@ -644,7 +644,7 @@ def test_format_context_block_structured_respects_max_tokens_cap():
     assert len(long) <= int(2000 * 4 * 1.15)
 
 
-# ─── Reranker (Cycle 30 Fix 5) ───────────────────────────────────────────────
+# ─── Reranker ────────────────────────────────────────────────────────────────
 
 
 class _StubReranker:
@@ -721,7 +721,7 @@ class TestReranker:
         assert all("rerank_score" in f for f in ctx.facts)
 
 
-# ─── retrieve_multi (Cycle 30 Fix 3) ─────────────────────────────────────────
+# ─── retrieve_multi ──────────────────────────────────────────────────────────
 
 
 class TestRetrieveMulti:

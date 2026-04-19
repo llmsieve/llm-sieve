@@ -572,7 +572,7 @@ def demo():
         "I have a dog called Mabel, she's a border terrier.",
         "Do you remember where I work?",
         "What breed is Mabel?",
-        "Do you remember where Jake works?",  # absence-signal trap
+        "Do you remember where Pat works?",  # absence-signal trap
     ]
 
     console.print("[bold]Sieve demo[/] — 6 messages through the proxy:\n")

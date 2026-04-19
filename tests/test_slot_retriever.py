@@ -1,7 +1,7 @@
-"""Cycle 27 T7/T8/T9: SlotRetriever path tests.
+"""SlotRetriever path tests.
 
 Uses a fresh MemoryStore, seeds it with hand-crafted v2 facts that
-mirror what the cycle27 writer would produce, then drives SlotRetriever
+mirror what the writer would produce, then drives SlotRetriever
 against the 10 simulation queries plus edge cases.
 """
 from __future__ import annotations
@@ -32,34 +32,34 @@ def store(tmp_path: Path):
 
 @pytest.fixture
 def seeded_store(store):
-    """Seed facts about Mary Chen matching the cycle27 simulation ground truth."""
-    subj = "mary_chen"
+    """Seed facts about Jamie Rivera matching simulation ground truth."""
+    subj = "jamie_rivera"
     now = _now()
 
     # Current slots
     store.insert_fact(
-        content="Mary Chen works at Meridian Health",
+        content="Jamie Rivera works at Example Corp",
         subject_entity_id=subj, predicate="employer",
-        object_literal="Meridian Health",
+        object_literal="Example Corp",
         slot_key=f"{subj}:employer", valid_from="2026-04-01",
         category="employment", extraction_method="s2_llm",
     )
     store.insert_fact(
-        content="Mary Chen's role is VP of Product",
+        content="Jamie Rivera's role is VP of Product",
         subject_entity_id=subj, predicate="role",
         object_literal="VP of Product",
         slot_key=f"{subj}:role", valid_from="2026-04-01",
         category="employment", extraction_method="s2_llm",
     )
     store.insert_fact(
-        content="Mary Chen is separated",
+        content="Jamie Rivera is separated",
         subject_entity_id=subj, predicate="marital_status",
         object_literal="separated",
         slot_key=f"{subj}:marital_status", valid_from="2026-03-01",
         category="relationships", extraction_method="s2_llm",
     )
     store.insert_fact(
-        content="Mary Chen lives in Boston",
+        content="Jamie Rivera lives in Boston",
         subject_entity_id=subj, predicate="residence_city",
         object_literal="Boston",
         slot_key=f"{subj}:residence_city", valid_from="2023-01-01",
@@ -68,19 +68,19 @@ def seeded_store(store):
 
     # Historical (past) employer row — valid_to set, superseded
     store.insert_fact(
-        content="Mary Chen works at Nexus Health",
+        content="Jamie Rivera works at Other Corp",
         subject_entity_id=subj, predicate="employer",
-        object_literal="Nexus Health",
+        object_literal="Other Corp",
         slot_key=f"{subj}:employer",
         valid_from="2024-01-01", valid_to="2026-04-01",
         category="employment", extraction_method="s2_llm",
     )
 
     # Relationships — insert an entity for owner and some targets
-    mary = store.insert_entity("Mary Chen", type="person")
+    mary = store.insert_entity("Jamie Rivera", type="person")
     derek = store.insert_entity("Derek Liu", type="person")
     eva = store.insert_entity("Eva Gupta", type="person")
-    tom = store.insert_entity("Tom", type="person")
+    tom = store.insert_entity("Kim", type="person")
 
     for rel, target in [
         ("mentor", derek),
@@ -100,23 +100,23 @@ def seeded_store(store):
 
 
 def test_slot_lookup_current_job_title(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("What's Mary's current job title and where does she work?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("What's Jamie's current job title and where does she work?")
     assert result.query_class == "slot_lookup"
     assert result.slot_predicate == "role"
     assert result.is_hit
-    # Cycle 28 alias map: a role query also pulls employer from the same
+    # Alias map: a role query also pulls employer from the same
     # cluster so the formatter can answer "where does she work" in one shot.
     contents = " ".join(
         (row.get("content") or "") for row in result.current_slots
     )
     assert "VP of Product" in contents
-    assert "Meridian" in contents or result.slot_predicate == "role"
+    assert "Example" in contents or result.slot_predicate == "role"
 
 
 def test_slot_lookup_marital_status(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("Is Mary still married?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("Is Jamie still married?")
     assert result.query_class == "slot_lookup"
     assert result.slot_predicate == "marital_status"
     assert result.is_hit
@@ -124,8 +124,8 @@ def test_slot_lookup_marital_status(seeded_store):
 
 
 def test_slot_lookup_living_situation(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("What's Mary's current living situation?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("What's Jamie's current living situation?")
     assert result.query_class == "slot_lookup"
     assert result.slot_predicate == "residence_city"
     assert result.is_hit
@@ -134,32 +134,32 @@ def test_slot_lookup_living_situation(seeded_store):
 
 def test_slot_lookup_miss_records_known_unknown(store):
     """Query classifies as slot_lookup, store has nothing → known_unknown."""
-    sr = SlotRetriever(store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("What's Mary's current job title and where does she work?")
+    sr = SlotRetriever(store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("What's Jamie's current job title and where does she work?")
     assert result.query_class == "slot_lookup"
     assert result.current_slots == []
-    assert f"mary_chen:role" in result.known_unknowns
+    assert f"jamie_rivera:role" in result.known_unknowns
     # Persisted for next time
-    kus = store.get_known_unknowns("mary_chen")
-    assert any(k["slot_key"] == "mary_chen:role" for k in kus)
+    kus = store.get_known_unknowns("jamie_rivera")
+    assert any(k["slot_key"] == "jamie_rivera:role" for k in kus)
 
 
 # ── T8 temporal_sequence tests ─────────────────────────────────────────────
 
 
 def test_temporal_career_progression(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("Walk me through Mary's career progression over the last few years.")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("Walk me through Jamie's career progression over the last few years.")
     assert result.query_class == "temporal_sequence"
     assert len(result.timeline) >= 2
     objs = [t["object_literal"] for t in result.timeline]
-    assert "Nexus Health" in objs
-    assert "Meridian Health" in objs
+    assert "Other Corp" in objs
+    assert "Example Corp" in objs
 
 
 def test_temporal_living_changed_over_time(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("How has Mary's living situation changed over time?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("How has Jamie's living situation changed over time?")
     assert result.query_class == "temporal_sequence"
     # Boston row exists; timeline at least includes it.
     assert any("Boston" in (t["content"] or "") for t in result.timeline)
@@ -169,8 +169,8 @@ def test_temporal_living_changed_over_time(seeded_store):
 
 
 def test_multi_hop_professional_network_pulls_relationships(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("Who in Mary's professional network could help with a career transition?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("Who in Jamie's professional network could help with a career transition?")
     assert result.query_class == "multi_hop"
     names = {r["target_name"] for r in result.relationships if r["target_name"]}
     assert "Derek Liu" in names
@@ -182,9 +182,9 @@ def test_multi_hop_professional_network_pulls_relationships(seeded_store):
 
 
 def test_multi_hop_birthday_gifts_question(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
     result = sr.retrieve(
-        "What birthday gifts would work for Mary's twin boys given her current financial situation?"
+        "What birthday gifts would work for Jamie's twin boys given her current financial situation?"
     )
     assert result.query_class == "multi_hop"
     # Current slots should include employer/role so the model can
@@ -197,14 +197,14 @@ def test_multi_hop_birthday_gifts_question(seeded_store):
 
 
 def test_generic_query_is_not_hit(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("Is Mary happy at work?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("Is Jamie happy at work?")
     assert result.query_class == "generic"
     assert not result.is_hit or len(result.current_slots) == 0
 
 
 def test_relationship_right_now_falls_through_to_generic(seeded_store):
-    sr = SlotRetriever(seeded_store, profile_owner_name="Mary Chen")
-    result = sr.retrieve("What's Mary's relationship with Tom right now?")
+    sr = SlotRetriever(seeded_store, profile_owner_name="Jamie Rivera")
+    result = sr.retrieve("What's Jamie's relationship with Kim right now?")
     # Classifier currently returns generic for A5 (ok — retrieval fall-through)
     assert result.query_class == "generic"

@@ -1,8 +1,8 @@
-"""OpenClaw history-preamble adapter.
+"""History-preamble adapter.
 
-OpenClaw embeds the entire conversation history INSIDE the `user`
-content field (not inside `messages[].history`), with a fixed marker
-pair:
+Some agent frameworks embed the entire conversation history INSIDE the
+`user` content field (not inside `messages[].history`), using a fixed
+marker pair:
 
     [Chat messages since your last reply - for context]
     User: ...
@@ -13,16 +13,13 @@ pair:
     [Current message - respond to this]
     User: <the actual new question>
 
-Recall's `_apply_token_budget` refuses to truncate the current user
-message (doing so silently would break semantics), so every OpenClaw
-query grows linearly — on the 30-day Albert run, outbound inflated
-from ~1.5K tokens (Day 1) to ~13.5K tokens (Day 30) and the token
-budget enforcer fired 172 times without fixing anything.
-
-This adapter lifts the history block out of the user content and
-rewrites it as proper message-level turns, so the existing
-`conversation_history` strip / fingerprint / last-N-turns logic can
-apply. The `user` field is left holding only the real new question.
+Sieve's `_apply_token_budget` refuses to truncate the current user
+message (doing so silently would break semantics), so every such
+request grows linearly. This adapter lifts the history block out of
+the user content and rewrites it as proper message-level turns, so
+the existing `conversation_history` strip / fingerprint / last-N-turns
+logic can apply. The `user` field is left holding only the real new
+question.
 """
 
 from __future__ import annotations
@@ -31,11 +28,12 @@ import logging
 import re
 from typing import Any
 
-logger = logging.getLogger("recall.openclaw_adapter")
+logger = logging.getLogger("sieve.history_preamble_adapter")
 
 
-# Fixed marker pair that OpenClaw always emits. The `-` variants cover
-# the historical and current spellings we've seen in captured payloads.
+# Fixed marker pair that the agent framework always emits. The `-`
+# variants cover the historical and current spellings we've seen in
+# captured payloads.
 _HISTORY_MARKER_RX = re.compile(
     r"\[Chat\s+messages\s+since\s+your\s+last\s+reply\s*[-–—]\s*"
     r"for\s+context\]",
@@ -79,7 +77,7 @@ def _split_turns(block: str) -> list[dict]:
     return turns
 
 
-def has_openclaw_preamble(user_text: str) -> bool:
+def has_history_preamble(user_text: str) -> bool:
     """Cheap probe used by the intercept handlers to decide whether to
     invoke the adapter. Matches on the history marker only — the
     current-message marker is not always present in follow-up payloads."""
@@ -88,11 +86,11 @@ def has_openclaw_preamble(user_text: str) -> bool:
     return bool(_HISTORY_MARKER_RX.search(user_text))
 
 
-def adapt_openclaw_payload(payload: dict[str, Any]) -> bool:
-    """Rewrite an OpenClaw-shaped payload in place.
+def adapt_history_preamble_payload(payload: dict[str, Any]) -> bool:
+    """Rewrite a history-preamble-shaped payload in place.
 
-    When the final `user` message content contains the OpenClaw marker
-    pair, this function:
+    When the final `user` message content contains the marker pair,
+    this function:
       1. extracts the history block between the two markers and parses
          it into message dicts (`{role, content}`)
       2. inserts those turns into `payload["messages"]` just before the
@@ -109,7 +107,8 @@ def adapt_openclaw_payload(payload: dict[str, Any]) -> bool:
     if not isinstance(messages, list) or not messages:
         return False
 
-    # Find the last user message — the one OpenClaw packages with history.
+    # Find the last user message — the one the agent framework packages
+    # with history.
     user_idx = None
     for i in range(len(messages) - 1, -1, -1):
         m = messages[i]
@@ -168,7 +167,7 @@ def adapt_openclaw_payload(payload: dict[str, Any]) -> bool:
     payload["messages"] = before + turns + [new_user] + after
 
     logger.info(
-        "OpenClaw adapter: lifted %d history turns, shrank user msg "
+        "history-preamble adapter: lifted %d history turns, shrank user msg "
         "%d→%d chars", len(turns), len(user_content), len(current_block),
     )
     return True

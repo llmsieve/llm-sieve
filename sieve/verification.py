@@ -1,4 +1,4 @@
-"""Cycle 19: Response Verification Layer (RVL).
+"""Response Verification Layer (RVL).
 
 
 
@@ -62,7 +62,7 @@ _RELATIONSHIP_WORDS = {
 # Words that look like proper nouns but should not be flagged as entity
 # references if missing from store — cities, common nouns, etc.
 _PROPER_NOUN_NOISE = frozenset({
-    "Mary", "User",  # the user themselves
+    "Jamie", "User",  # the user themselves
     # Months / days are filtered by writer.extract_proper_nouns already, but
     # safety net here as well.
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
@@ -74,12 +74,12 @@ _PROPER_NOUN_NOISE = frozenset({
     "The", "This", "That", "These", "Those", "Here", "There",
     "Hello", "Hi", "Hey", "Yes", "No", "Ok", "Okay", "Sure", "Thanks", "Thank",
     "However", "Therefore", "Although", "But", "And", "Or", "So", "Then",
-    "Note", "Based", "According", "Mary's",
+    "Note", "Based", "According", "Jamie's",
     # Pronouns (capitalised when sentence-initial)
     "My", "Our", "Your", "His", "Her", "Their", "I", "We", "You", "They",
     "She", "He", "It", "Me", "Us", "Him", "Them",
-    # Common UK cities (Albert-runner context — Bristol/London appear in
-    # every query; they are never meaningful as "not in records" signals)
+    # Common UK cities (Bristol/London appear in every query in evaluation
+    # runs; they are never meaningful as "not in records" signals)
     "Bristol", "London", "Cardiff", "Bath", "Manchester", "Birmingham",
     "Edinburgh", "Glasgow", "Liverpool", "Leeds", "Oxford", "Cambridge",
     "UK", "England", "Scotland", "Wales",
@@ -134,7 +134,7 @@ def _user_relationships(store: Any) -> dict[str, list[str]]:
     try:
         cur = store._conn.cursor()
         row = cur.execute(
-            "SELECT id FROM entities WHERE lower(name) IN ('user','mary','mary chen') LIMIT 1"
+            "SELECT id FROM entities WHERE lower(name) IN ('user','jamie','jamie rivera') LIMIT 1"
         ).fetchone()
         if not row:
             return rel_map
@@ -180,7 +180,7 @@ _REL_CANONICAL = {
     "dog": "dog", "cat": "cat", "pet": "pet", "puppy": "dog", "kitten": "cat",
 }
 
-# Cycle 30 Fix 4: canonical category buckets used for store coverage scoring.
+# Canonical category buckets used for store coverage scoring.
 # Absence signals only fire when the store has enough evidence to be
 # authoritative about a category — a Day-2 store with 3 facts should not
 # be telling the model "the user has no daughter" just because no
@@ -249,7 +249,7 @@ def _store_coverage_score(store: Any, category: str) -> float:
         # relationship inside the bucket.
         user_row = cur.execute(
             "SELECT id FROM entities "
-            "WHERE lower(name) IN ('user','mary','mary chen') LIMIT 1"
+            "WHERE lower(name) IN ('user','jamie','jamie rivera') LIMIT 1"
         ).fetchone()
         cat_entities = 0
         if user_row:
@@ -293,11 +293,11 @@ def _assertion_terms_in_query(query: str) -> set[str]:
     """Relation / entity terms the user asserts ownership of in the query.
 
     "I need to pick up my daughter from school" yields {"daughter"}.
-    "My wife Sophie's birthday" yields {"wife"}.
+    "My wife Sam's birthday" yields {"wife"}.
     "What was the name of my cat?" yields an empty set — interrogative.
 
     Only first-person possessives ("my", "our") count as assertions.
-    Second-person ("your") and third-person ("Albert's", "the user's")
+    Second-person ("your") and third-person ("Jamie's", "the user's")
     are how the model asks about the user, not how the user claims
     ownership, so they never trigger suppression.
     """
@@ -316,7 +316,7 @@ def _assertion_terms_in_query(query: str) -> set[str]:
 
 
 # Proper nouns introduced by a possessive phrase in the current message,
-# e.g. "my wife Sophie", "my son Oscar", "our dog Biscuit". When this
+# e.g. "my wife Sam", "my son Oscar", "our dog Biscuit". When this
 # pattern appears in an assertion (non-interrogative sentence), the
 # capitalised name is being introduced by the user and should not
 # trigger a negative signal — they are telling us about a new entity.
@@ -386,9 +386,9 @@ def build_absence_signals(
     store: Any,
     recent_turns: list[dict] | None = None,
 ) -> list[AbsenceSignal]:
-    """Cycle 19 Layer 1 (v3 — Q64 widening): inject absence signals only
-    when the query references a relation / proper noun that has NO
-    supporting evidence across ANY available context surface.
+    """Layer 1 (v3): inject absence signals only when the query
+    references a relation / proper noun that has NO supporting evidence
+    across ANY available context surface.
 
     Evidence surfaces consulted, in order:
 
@@ -398,12 +398,12 @@ def build_absence_signals(
          ``recent_turns`` — typically the last 3 user/assistant turns
          already bound for the lean payload).
       4. A possessive-assertion scan of the query itself (``my daughter``,
-         ``our wife``, ``Albert's dog``). When the user asserts they
+         ``our wife``, ``Jamie's dog``). When the user asserts they
          have X, we must never tell the model X doesn't exist.
 
     If any of (1)-(4) mentions the term, the signal is suppressed. A
-    trap query like "What was the name of Albert's cat again?" still
-    fires because the cat word is not asserted ("Albert's cat" is a
+    trap query like "What was the name of Jamie's cat again?" still
+    fires because the cat word is not asserted ("Jamie's cat" is a
     question, not a claim), and no fact / turn / edge backs it.
     Conversely "I need to pick up my daughter from school" has
     "daughter" in the possessive-assertion set and never fires a
@@ -449,10 +449,11 @@ def build_absence_signals(
         return False
 
     # (a) Relationship-word check
-    # Cycle 30 Fix 4: gated on per-category store coverage. We never fire
-    # "the user has no daughter" when the store is still too sparse to be
-    # authoritative — below _ABSENCE_COVERAGE_GATE we stay silent and let
-    # the model answer from context rather than risk a false negative.
+    # Gated on per-category store coverage. We never fire "the user has
+    # no daughter" when the store is still too sparse to be
+    # authoritative — below _ABSENCE_COVERAGE_GATE we stay silent and
+    # let the model answer from context rather than risk a false
+    # negative.
     user_rels = _user_relationships(store)
     _coverage_cache: dict[str, float] = {}
 
@@ -498,14 +499,14 @@ def build_absence_signals(
     # (b) Proper-noun check
     #
     # Suppress when the noun is introduced by the user in the CURRENT
-    # message alongside a possessive assertion ("my wife Sophie"). If
+    # message alongside a possessive assertion ("my wife Sam"). If
     # the user is telling us about a new entity this turn, firing a
     # negative signal against it is a false refusal.
     #
-    # Cycle 30 Fix 4: also gated on an unconditional facts-density
-    # confidence (no category context here — the noun could be anything),
-    # so a sparse store stays silent rather than emitting "'Whiskers' is
-    # not in the user's records" and risking a fabricated rewrite.
+    # Also gated on an unconditional facts-density confidence (no
+    # category context here — the noun could be anything), so a sparse
+    # store stays silent rather than emitting "'Whiskers' is not in the
+    # user's records" and risking a fabricated rewrite.
     introduced_nouns = _introduced_proper_nouns(query)
     facts_only_coverage = _coverage("other")
     if facts_only_coverage <= _ABSENCE_COVERAGE_GATE:
@@ -547,7 +548,7 @@ def build_absence_signals(
 @dataclass
 class FlaggedClaim:
     """A response claim that contradicts a stored fact."""
-    subject: str          # entity the claim is about (e.g. "Tom", "Mary")
+    subject: str          # entity the claim is about (e.g. "Kim", "Jamie")
     predicate: str        # normalised predicate key (e.g. "job_state")
     claimed: str          # what the response said the object was
     stored: str           # what the store actually has
@@ -568,11 +569,11 @@ class Verification:
 def _extract_response_proper_nouns(response: str) -> list[str]:
     """Extract proper nouns from freeform response text.
 
-    v3 (cycle 20): markdown-aware — skips captures that appear inside
-    bullet-list headers or **emphasis** markers, since those are almost
-    never real named entities (they're section labels chosen by the
-    model). The prose-flow check runs first; noise-word and first-word
-    filtering still apply.
+    v3: markdown-aware — skips captures that appear inside bullet-list
+    headers or **emphasis** markers, since those are almost never real
+    named entities (they're section labels chosen by the model). The
+    prose-flow check runs first; noise-word and first-word filtering
+    still apply.
     """
     if not response:
         return []
@@ -667,8 +668,8 @@ def _is_known_entity(name: str, store: Any) -> bool:
 #
 # The predicate templates here are intentionally more permissive than the
 # writer's (writer.py `_VALUE_PREDICATES`) because LLM freeform responses
-# use language that the writer's strict templates reject — e.g. "Tom is
-# still working as a lawyer" or "User's spouse Tom is a high school history
+# use language that the writer's strict templates reject — e.g. "Kim is
+# still working as a lawyer" or "User's spouse Kim is a high school history
 # teacher". This module needs to normalise both sides to the same shape.
 
 _JOB_ROLES = (
@@ -705,18 +706,18 @@ _V3_RESPONSE_CLAIMS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bhas\s+(?:a|an)\s+(?:daughter|son|dog|cat|pet)\s+named\s+([A-Z][a-zA-Z]+)\b"), "named_child_pet"),
 ]
 
-# Store-side fact extractors. Handles "User's spouse Tom is a ..." style
+# Store-side fact extractors. Handles "User's spouse Kim is a ..." style
 # fact formats that the writer's templates don't capture for cross-entity
 # attributes. Output shape: (subject_hint, predicate_key, object).
 _V3_STORE_PATTERNS: list[tuple[re.Pattern, str]] = [
-    # "User's role is VP of Product" / "Tom's job is teacher" — possessive form
+    # "User's role is VP of Product" / "Kim's job is teacher" — possessive form
     (re.compile(
-        rf"(?P<subj>user|mary|the user|[A-Z][a-zA-Z]+)'s\s+"
+        rf"(?P<subj>user|jamie|the user|[A-Z][a-zA-Z]+)'s\s+"
         rf"(?:current\s+|new\s+)?(?:role|job|position|occupation|title)\s+is\s+"
         rf"(?:a\s+|an\s+|the\s+)?(?P<obj>(?:\w+\s+){{0,3}}(?:{_JOB_ROLES_RX}))\b",
         re.IGNORECASE,
     ), "job_role"),
-    # "<anything> Tom is a history teacher" — capture role tail.
+    # "<anything> Kim is a history teacher" — capture role tail.
     (re.compile(
         rf"(?P<subj>[A-Z][a-zA-Z]+)\s+is\s+(?:a\s+|an\s+)?"
         rf"(?:\w+\s+){{0,3}}(?P<obj>(?:\w+\s+)*(?:{_JOB_ROLES_RX}))\b",
@@ -730,18 +731,18 @@ _V3_STORE_PATTERNS: list[tuple[re.Pattern, str]] = [
     # "User lives in X" — present tense only, past tense does not set a
     # current residence and therefore cannot drive a contradiction.
     (re.compile(
-        r"(?P<subj>user|mary|the user)\s+lives?\s+in\s+(?P<obj>[\w ]+?)(?:[\.,;]|$)",
+        r"(?P<subj>user|jamie|the user)\s+lives?\s+in\s+(?P<obj>[\w ]+?)(?:[\.,;]|$)",
         re.IGNORECASE,
     ), "residence"),
-    # "User/Mary is married/separated/..." and "User and Tom are separated"
+    # "User/Jamie is married/separated/..." and "User and Kim are separated"
     (re.compile(
-        r"(?P<subj>user|mary|the user)\s+(?:and\s+\w+\s+)?(?:is|are|have been|has been)\s+"
+        r"(?P<subj>user|jamie|the user)\s+(?:and\s+\w+\s+)?(?:is|are|have been|has been)\s+"
         r"(?P<obj>married|engaged|separated|divorced|single|widowed)\b",
         re.IGNORECASE,
     ), "marital_state"),
     # "User is N years old"
     (re.compile(
-        r"(?P<subj>user|mary|the user)\s+is\s+(?P<obj>\d+)\s+years?\s+old\b",
+        r"(?P<subj>user|jamie|the user)\s+is\s+(?P<obj>\d+)\s+years?\s+old\b",
         re.IGNORECASE,
     ), "age"),
 ]
@@ -767,7 +768,7 @@ _SUBJECT_RX = re.compile(
 def _sentence_subject(sentence: str) -> str | None:
     """Best-effort guess at the subject of a sentence.
     Returns a capitalised name, or None. If the sentence uses a possessive
-    form ('Mary's parents live in X'), return None — the grammatical subject
+    form ('Jamie's parents live in X'), return None — the grammatical subject
     is the possessed noun, not the named entity, and treating it as a claim
     about the entity causes false positives on family-relation lookups.
     """
@@ -805,7 +806,7 @@ def _extract_response_claims(sentence: str) -> list[tuple[str, str, str]]:
     if subj is None:
         return triples
     body = sentence
-    # Strip appositive clauses ("Mary, as the CTO at Nexus, is not...") —
+    # Strip appositive clauses ("Jamie, as the CTO at Other Corp, is not...") —
     # claims inside them are usually framing, not assertions, and a
     # negation on the main verb can be missed by the sentence-level check.
     body = re.sub(r",\s*as\s+(?:the\s+|a\s+|an\s+)?[^,]+,", ",", body)
@@ -868,9 +869,9 @@ def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
         return out
 
     text = content.strip()
-    # Strip common user-possessive prefixes ("User's spouse Tom" -> "Tom")
+    # Strip common user-possessive prefixes ("User's spouse Kim" -> "Kim")
     stripped = re.sub(
-        r"^(?:User's|the user's|Mary's)\s+(?:spouse|husband|wife|partner|friend|"
+        r"^(?:User's|the user's|Jamie's)\s+(?:spouse|husband|wife|partner|friend|"
         r"colleague|boss|manager|mother|father|parent|son|daughter|child|"
         r"brother|sister|best friend|neighbor|neighbour)\s+",
         "",
@@ -890,7 +891,7 @@ def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
                 continue
             if not subj or not obj:
                 continue
-            subj_norm = "the_user" if subj.lower() in {"theuser", "user", "mary", "the user"} else subj
+            subj_norm = "the_user" if subj.lower() in {"theuser", "user", "jamie", "the user"} else subj
             if key == "job_role":
                 role = _normalise_role(obj)
                 if role:
@@ -912,12 +913,12 @@ def _subjects_equivalent(a: str, b: str) -> bool:
     b_l = b.lower().strip()
     if a_l == b_l:
         return True
-    user_aliases = {"the_user", "theuser", "user", "mary", "mary chen", "the user"}
+    user_aliases = {"the_user", "theuser", "user", "jamie", "jamie rivera", "the user"}
     if a_l in user_aliases and b_l in user_aliases:
         return True
     if not a_l or not b_l:
         return False
-    # Allow first-name match (Tom ≡ Tom), but only for non-user tokens
+    # Allow first-name match (Kim ≡ Kim), but only for non-user tokens
     if a_l in user_aliases or b_l in user_aliases:
         return False
     return a_l.split()[0] == b_l.split()[0]
@@ -944,8 +945,8 @@ def _detect_claim_contradictions(
             return store_cache[key_norm]
         lookup_name = "user" if subject == "the_user" else subject
         facts = _fetch_entity_facts(lookup_name, store)
-        # Also pull user facts for Mary
-        if lookup_name.lower() == "mary":
+        # Also pull user facts when the subject is the owner's first name
+        if lookup_name.lower() == "jamie":
             facts += _fetch_entity_facts("user", store)
         triples: list[tuple[str, str, str, str]] = []
         for f in facts:
@@ -954,7 +955,7 @@ def _detect_claim_contradictions(
         store_cache[key_norm] = triples
         return triples
 
-    user_aliases = {"mary", "mary chen", "the user", "user", "the_user", "she", "he"}
+    user_aliases = {"jamie", "jamie rivera", "the user", "user", "the_user", "she", "he"}
 
     def _canon_subj(subj: str) -> str:
         return "the_user" if subj.lower() in user_aliases else subj
@@ -1005,7 +1006,7 @@ def verify_response(
     store: Any,
     retrieved_facts: list[dict] | None = None,
 ) -> Verification:
-    """Cycle 19 Layer 3: scan response text for unsupported entities and claims.
+    """Layer 3: scan response text for unsupported entities and claims.
 
     v2 (post-pass-2): the v1 implementation skipped refusals entirely and
     used overly conservative noun extraction, so it never fired in practice.
@@ -1013,7 +1014,7 @@ def verify_response(
       - A refusal *prefix* doesn't make the whole response clean — keep
         verifying any concrete claims that follow.
       - Catch relationship-word claims: if the response asserts a specific
-        property of a relationship the user doesn't have (e.g. "Mary's
+        property of a relationship the user doesn't have (e.g. "Jamie's
         daughter is named Sarah" when there is no daughter), flag it.
       - Tighten proper-noun extraction: include single-word capitalised
         names mid-sentence; only ignore the very first word of the
@@ -1030,8 +1031,8 @@ def verify_response(
 
     # ── Claim-vs-store contradiction check (v3 primary) ──────────────────────
     # Scan response sentences for predicate claims about known entities that
-    # directly contradict stored facts. This catches "Tom is a lawyer" when
-    # the store has "Tom is a history teacher".
+    # directly contradict stored facts. This catches "Kim is a lawyer" when
+    # the store has "Kim is a history teacher".
     flagged_claims = _detect_claim_contradictions(response_text, store)
 
     # ── Proper noun check ────────────────────────────────────────────────────
@@ -1046,7 +1047,7 @@ def verify_response(
 
     # ── Relationship-word check ──────────────────────────────────────────────
     # If the response asserts something concrete about a relationship the
-    # user does not have (e.g. "Mary's daughter is named Sarah"), flag it.
+    # user does not have (e.g. "Jamie's daughter is named Sarah"), flag it.
     user_rels = _user_relationships(store)
     rl = response_text.lower()
     # Expand the store's relationship-key set so that generic terms
@@ -1079,7 +1080,7 @@ def verify_response(
         if any(word in (f.get("content", "") or "").lower() for f in facts):
             continue
         # Skip if the response itself is making a negative claim about the word
-        # ("there is no daughter", "no record of a daughter", "mary doesn't have a daughter")
+        # ("there is no daughter", "no record of a daughter", "jamie doesn't have a daughter")
         negation_markers = (
             f"no {word}",
             f"no record of a {word}", f"no record of any {word}",
@@ -1095,7 +1096,7 @@ def verify_response(
     if not flagged_entities and not flagged_relations and not flagged_claims:
         return Verification(is_clean=True)
 
-    # Build a targeted corrective prompt. Design goals (cycle21):
+    # Build a targeted corrective prompt. Design goals:
     #   - Short and imperative — long prompts push qwen3.5:9b into refusal.
     #   - Name the SPECIFIC contradicted field, not a category.
     #   - Explicitly instruct REWRITE, never refuse or disclaim.

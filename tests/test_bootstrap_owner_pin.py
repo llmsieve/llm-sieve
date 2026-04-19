@@ -51,26 +51,26 @@ def _fact_contents(store: MemoryStore) -> list[str]:
 
 def test_bootstrap_populates_empty_store(store):
     owner = ProfileOwnerConfig(
-        name="Albert Green",
-        aliases=["Albert", "I"],
-        pin="Albert is a 41-year-old engineer in Bristol.",
+        name="Jamie Rivera",
+        aliases=["Jamie", "I"],
+        pin="Jamie is a 41-year-old engineer in Bristol.",
     )
     asyncio.run(_maybe_bootstrap_owner_pin(store, owner, _noop_embed))
 
     names = [n for (n, _t) in _entities(store)]
     assert "User" in names
-    assert "Albert Green" in names
+    assert "Jamie Rivera" in names
 
     contents = _fact_contents(store)
-    assert any("Albert Green" in c and "41-year-old" in c for c in contents), (
+    assert any("Jamie Rivera" in c and "41-year-old" in c for c in contents), (
         f"pin not inserted as fact: {contents}"
     )
 
 
 def test_bootstrap_is_idempotent(store):
     owner = ProfileOwnerConfig(
-        name="Albert Green",
-        pin="Albert is a 41-year-old engineer in Bristol.",
+        name="Jamie Rivera",
+        pin="Jamie is a 41-year-old engineer in Bristol.",
     )
     asyncio.run(_maybe_bootstrap_owner_pin(store, owner, _noop_embed))
     fact_count_after_first = len(_fact_contents(store))
@@ -81,7 +81,7 @@ def test_bootstrap_is_idempotent(store):
 
 
 def test_bootstrap_no_pin_is_noop(store):
-    owner = ProfileOwnerConfig(name="Albert Green", pin="")
+    owner = ProfileOwnerConfig(name="Jamie Rivera", pin="")
     asyncio.run(_maybe_bootstrap_owner_pin(store, owner, _noop_embed))
     assert _entities(store) == []
     assert _fact_contents(store) == []
@@ -96,9 +96,9 @@ def test_bootstrap_no_owner_name_is_noop(store):
 def test_bootstrap_survives_embedder_failure(store):
     """Embedder outages must not block startup — insert without vector."""
     owner = ProfileOwnerConfig(
-        name="Albert Green",
-        pin="Albert is a 41-year-old engineer in Bristol.",
+        name="Jamie Rivera",
+        pin="Jamie is a 41-year-old engineer in Bristol.",
     )
     asyncio.run(_maybe_bootstrap_owner_pin(store, owner, _fail_embed))
     contents = _fact_contents(store)
-    assert any("Albert Green" in c for c in contents)
+    assert any("Jamie Rivera" in c for c in contents)

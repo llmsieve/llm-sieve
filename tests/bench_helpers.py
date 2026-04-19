@@ -54,8 +54,8 @@ _HOBBIES = [
 
 _PROJECTS = [
     "Project Alpha", "Recall", "DataSync", "CloudBridge", "NeuralNet",
-    "Quantum", "Fusion", "Catalyst", "Nexus", "Horizon",
-    "Pinnacle", "Vertex", "Meridian", "Zenith", "Aurora",
+    "Quantum", "Fusion", "Catalyst", "Pioneer", "Horizon",
+    "Pinnacle", "Vertex", "Cascade", "Zenith", "Aurora",
     "Titan", "Phoenix", "Orion", "Eclipse", "Summit",
 ]
 
@@ -433,7 +433,7 @@ def make_bloated_payload(
     workspace_tokens: int = 3600,
     history_turns: int = 20,
 ) -> dict:
-    """Generate a realistically bloated OpenClaw-style Ollama payload.
+    """Generate a realistically bloated agent-framework-style Ollama payload.
 
     Simulates ~47k tokens of context: system prompt, tool schemas,
     workspace files, and long conversation history.

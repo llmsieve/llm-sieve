@@ -18,7 +18,7 @@ from sieve.embeddings import EmbeddingClient
 from sieve.embeddings_provider import RerankerService
 from sieve.fingerprint import FingerprintCache, decompose
 from sieve.learning import LearningLoop
-from sieve.openclaw_adapter import adapt_openclaw_payload
+from sieve.history_preamble_adapter import adapt_history_preamble_payload
 from sieve.pipeline import compose_lean_payload, compose_with_tool_selection
 from sieve.tool_registry import ToolRegistry
 from sieve.proxy import ProxyClient, forward_payload, forward_request
@@ -135,11 +135,11 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
 
     proxy_client = ProxyClient(config.provider.base_url)
     embedding_client = EmbeddingClient(config)
-    # Cycle 30 Fix 5: optional cross-encoder reranker. Loaded during
-    # lifespan startup alongside the FastEmbed embedder so the first real
-    # query doesn't pay the ONNX download cost. If loading fails (no
-    # network, model unavailable) the service stays unavailable and the
-    # retriever degrades to pure vector search — no fatal condition.
+    # Optional cross-encoder reranker. Loaded during lifespan startup
+    # alongside the FastEmbed embedder so the first real query doesn't
+    # pay the ONNX download cost. If loading fails (no network, model
+    # unavailable) the service stays unavailable and the retriever
+    # degrades to pure vector search — no fatal condition.
     reranker_service = RerankerService()
     # The active embedding backend is the single source of truth for
     # vector dimension. Sync the store config to its value before the
@@ -153,7 +153,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     memory_writer: MemoryWriter | None = None
     classifier: QueryClassifier | None = None
     retriever: ContextRetriever | None = None
-    slot_retriever: Any = None  # cycle28: SlotRetriever, imported lazily
+    slot_retriever: Any = None  # SlotRetriever, imported lazily
     recall_handler: RecallHandler | None = None
     learning_loop: LearningLoop | None = None
     tool_registry: ToolRegistry | None = None
@@ -204,9 +204,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 "Embedding backend configured (provider=%s, dim=%d)",
                 embedding_client.provider_name, embedding_client.dimension,
             )
-        # Cycle 30 Fix 5: load the cross-encoder reranker. reranker_service
-        # handles failure internally — an exception just leaves
-        # .available=False and the retriever runs without rerank.
+        # Load the cross-encoder reranker. reranker_service handles
+        # failure internally — an exception just leaves .available=False
+        # and the retriever runs without rerank.
         if config.retrieval.reranker_enabled:
             loaded = await asyncio.to_thread(reranker_service.load)
             if loaded:
@@ -267,7 +267,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             temporal_dedup_enabled=config.retrieval.temporal_dedup_enabled,
             reranker=reranker_service if reranker_service.available else None,
         )
-        # Cycle 28: SlotRetriever is constructed unconditionally but only
+        # SlotRetriever is constructed unconditionally but only
         # consulted when ablation.schema_v2 is on. Construction is cheap
         # and the extra object is harmless.
         from sieve.slot_retriever import SlotRetriever
@@ -332,8 +332,8 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     )
     app.state.validation_collector = validation_collector
     # "Sticky current" envelope set by the runner ahead of each logical
-    # Phase B query. OpenClaw fans out into multiple Ollama sub-requests
-    # per agent turn; all of them share this envelope.
+    # Phase B query. The agent framework fans out into multiple Ollama
+    # sub-requests per agent turn; all of them share this envelope.
     app.state.validation_current_envelope: dict | None = None
     if config.validation.enabled:
         logger.info(
@@ -364,10 +364,10 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     async def validation_register_next(request: Request):
         """Register the envelope for the next logical Phase B query.
 
-        Sticky: all OpenClaw sub-requests belonging to the same agent
-        turn (tool calls, thinking passes) will share this envelope
-        until a new one is registered. Required because OpenClaw's
-        agent runtime strips ``X-Validation-*`` headers before the
+        Sticky: all agent-framework sub-requests belonging to the same
+        agent turn (tool calls, thinking passes) will share this
+        envelope until a new one is registered. Required because some
+        agent runtimes strip ``X-Validation-*`` headers before the
         request reaches this proxy.
         """
         if not config.validation.enabled:
@@ -528,7 +528,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
 
         Returns "" on streaming responses (no buffered body), parse failures,
         or any other extraction error. Used to hand the assistant reply to
-        the writer for LLM episode summarisation (Cycle 30 Fix 2).
+        the writer for LLM episode summarisation.
         """
         if response is None or hasattr(response, "body_iterator"):
             return ""
@@ -556,9 +556,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         stage-level stats into the per-request row. Production callers
         pass ``metrics=None`` and the behaviour is unchanged.
 
-        ``assistant_text`` (Cycle 30 Fix 2) lets the writer request a
-        one-sentence episode summary from the main model. Empty = fall
-        back to the legacy truncation.
+        ``assistant_text`` lets the writer request a one-sentence
+        episode summary from the main model. Empty = fall back to the
+        legacy truncation.
         """
         if memory_writer is None or not memory_store._conn or not user_text.strip():
             return
@@ -601,8 +601,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             return None
         try:
             hdr = extract_validation_headers({k.lower(): v for k, v in request.headers.items()})
-            # If X-Validation-* headers are missing (Phase B: OpenClaw
-            # strips them), fall back to the sticky current envelope.
+            # If X-Validation-* headers are missing (Phase B: the agent
+            # framework strips them), fall back to the sticky current
+            # envelope.
             if not hdr.get("run_id"):
                 queued = app.state.validation_current_envelope
                 if queued:
@@ -956,7 +957,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         Returns:
             (context_block_text, retrieved_facts, absence_signals,
              is_pure_general) — facts and signals are empty lists if no
-            retrieval happened. The text already includes Cycle 19 Layer 1
+            retrieval happened. The text already includes Layer 1
             absence signals and Layer 2 closed-world framing if those
             flags are enabled; signals is returned separately so
             validation telemetry can count accurately. is_pure_general
@@ -973,7 +974,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         if not user_text.strip():
             return "", [], [], False
 
-        # Cycle 28 EXTREME narrative summary — computed up-front so it
+        # EXTREME narrative summary — computed up-front so it
         # applies whether or not the classifier decides retrieval is
         # needed. A 42K-token inbound with no personal signals still
         # benefits from a narrative digest; skipping it just because
@@ -1011,9 +1012,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 logger.warning("extreme summary build failed: %s", exc)
 
         try:
-            # Cycle 28 Option B2: slot-first. When schema_v2 is on, run
-            # the deterministic SlotRetriever BEFORE the L1 classifier
-            # so contradiction queries ("is Mary still married?") that
+            # Slot-first retrieval. When schema_v2 is on, run the
+            # deterministic SlotRetriever BEFORE the L1 classifier
+            # so contradiction queries ("is Jamie still married?") that
             # would otherwise fall below the L1 sim threshold still get
             # the slot lookup. SlotRetriever is deterministic and cheap
             # (~1ms of regex + SQL). If it hits we BYPASS the L1 gate
@@ -1072,10 +1073,10 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     decision_complexity, dyn_k, is_followup,
                 )
                 if decision.needs_retrieval:
-                    # Cycle 30 Fix 3: decompose complexity=2 (multi-hop
-                    # / complex follow-up) queries into 2-4 sub-queries
-                    # and merge their top-3 results. Other complexities
-                    # hit the single-query path unchanged.
+                    # Decompose complexity=2 (multi-hop / complex
+                    # follow-up) queries into 2-4 sub-queries and merge
+                    # their top-3 results. Other complexities hit the
+                    # single-query path unchanged.
                     if (
                         decision_complexity == 2
                         and config.retrieval.query_decomposition_enabled
@@ -1133,7 +1134,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
 
             # If the slot-first path hit, render via format_context_v2
             # with ctx.facts as supporting facts. Otherwise apply the
-            # existing Cycle 28 post-hoc schema_v2 merge path.
+            # existing post-hoc schema_v2 merge path.
             if slot_hit and slot_result is not None:
                 try:
                     from sieve.context_format_v2 import format_context_v2
@@ -1180,14 +1181,14 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     text = text + "\n" + extra
                     logger.info("ABL-AS: injected %d absence signal(s)", len(absence_signals))
 
-            # Cycle 19 Layer 2 — Closed-World Framing (ABL-CW)
+            # Layer 2 — Closed-World Framing (ABL-CW)
             if config.ablation.closed_world and text:
                 from sieve.verification import CLOSED_WORLD_FRAMING
                 text = text + CLOSED_WORLD_FRAMING
                 logger.info("ABL-CW: closed-world framing appended")
 
-            # Cycle 28 EXTREME: append the pre-computed narrative summary
-            # (built before retrieval ran so it fires even on non-retrieval
+            # EXTREME: append the pre-computed narrative summary (built
+            # before retrieval ran so it fires even on non-retrieval
             # paths). Placed last so [CURRENT] slot facts still lead.
             if extreme_summary_text:
                 text = (text + "\n\n" + extreme_summary_text) if text else extreme_summary_text
@@ -1226,11 +1227,12 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             think_response = _process_think_tags(payload)
             if think_response is not None:
                 return JSONResponse(content=think_response)
-            # OpenClaw ships chat history INSIDE the user content. Lift
-            # it out into proper message-level turns so the standard
-            # conversation_history strip / last-N-turns logic applies;
-            # otherwise the outbound grows linearly with the run.
-            adapt_openclaw_payload(payload)
+            # Some agent frameworks ship chat history INSIDE the user
+            # content. Lift it out into proper message-level turns so
+            # the standard conversation_history strip / last-N-turns
+            # logic applies; otherwise the outbound grows linearly with
+            # the run.
+            adapt_history_preamble_payload(payload)
             user_text = _user_text_from(payload)
             model = payload.get("model", "")
             mode = detect_mode(model, config.mode_override)
@@ -1285,7 +1287,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 )
             else:
                 response = await forward_payload(request, proxy_client, lean)
-            # Cycle 19 Layer 3: post-generation response verification
+            # Layer 3: post-generation response verification
             response = await _verify_and_maybe_correct(
                 request, response, lean, user_text, retrieved_facts, "ollama",
             )
@@ -1322,8 +1324,8 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             think_response = _process_think_tags(payload)
             if think_response is not None:
                 return JSONResponse(content=think_response)
-            # Lift OpenClaw's history-in-user-content into proper turns.
-            adapt_openclaw_payload(payload)
+            # Lift any history-in-user-content preamble into proper turns.
+            adapt_history_preamble_payload(payload)
             user_text = _user_text_from(payload)
             model = payload.get("model", "")
             mode = detect_mode(model, config.mode_override)
@@ -1375,7 +1377,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 )
             else:
                 response = await forward_payload(request, proxy_client, lean)
-            # Cycle 19 Layer 3: post-generation response verification
+            # Layer 3: post-generation response verification
             response = await _verify_and_maybe_correct(
                 request, response, lean, user_text, retrieved_facts, "openai",
             )

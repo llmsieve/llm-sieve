@@ -143,16 +143,16 @@ _pat("birthday",
      r"\bmy\s+birthday\s+is\s+(?:on\s+)?([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b",
      "objective", "temporal")
 
-# ── Cycle 16 FIX_1: state-transition patterns ────────────────────────────────
-# These emit STATE facts (not evidence) so the supersession matcher (FIX_2)
-# has predicate-shaped facts to chain together. Category="state_transition"
+# ── State-transition patterns ────────────────────────────────────────────────
+# These emit STATE facts (not evidence) so the supersession matcher has
+# predicate-shaped facts to chain together. Category="state_transition"
 # routes them to the state_transition handler in extract_facts_s1.
 
 # Marital separation / divorce — broad cues, no capture group needed
 _pat("state_separated",
      r"\b(?:we(?:'ve| have)?\s+separated|"
      r"we(?:'re| are)\s+(?:now\s+)?separated|"
-     r"(?:tom|[A-Z][a-z]+)\s+and\s+i\s+(?:have\s+|just\s+)?separated|"
+     r"(?:[A-Z][a-z]+)\s+and\s+i\s+(?:have\s+|just\s+)?separated|"
      r"separated\s+from\s+(?:my\s+)?(?:husband|wife|spouse|partner)|"
      r"(?:my\s+)?(?:husband|wife|spouse|partner)\s+moved\s+out|"
      r"i\s+moved\s+out\s+of\s+(?:the\s+|our\s+)|"
@@ -330,8 +330,8 @@ def extract_facts_s1(text: str) -> list[ExtractedFact]:
     for name, pattern, fact_type, category in _PATTERNS:
         for m in pattern.finditer(text):
             groups = [g.strip() for g in m.groups() if g]
-            # Cycle 16 FIX_1: zero-capture state-transition patterns
-            # (separated/divorced) emit a fixed state fact on any match.
+            # Zero-capture state-transition patterns (separated /
+            # divorced) emit a fixed state fact on any match.
             if not groups:
                 if category == "state_transition_separated":
                     _add("User is separated", "temporal", "relationship", confidence=0.9)
@@ -407,9 +407,8 @@ def extract_facts_s1(text: str) -> list[ExtractedFact]:
                         _add(f"User speaks {val}", fact_type, category)
 
             elif category.startswith("state_transition"):
-                # Cycle 16 FIX_1: emit STATE facts shaped to match the
-                # FIX_2 value-predicate templates so they can supersede
-                # earlier state facts.
+                # Emit STATE facts shaped to match the value-predicate
+                # templates so they can supersede earlier state facts.
                 kind = category.removeprefix("state_transition_")
                 if kind == "separated":
                     _add("User is separated", "temporal", "relationship",
@@ -470,9 +469,9 @@ def extract_proper_nouns(text: str) -> list[str]:
 
 # ─── Stage 2: LLM extraction ──────────────────────────────────────────────────
 
-# Cycle 26 Fix 1: the S2 prompt is now a template rendered with the
-# profile owner's name. When owner_name is empty, we render the generic
-# body only (backwards-compatible fallback).
+# The S2 prompt is a template rendered with the profile owner's name.
+# When owner_name is empty, we render the generic body only
+# (backwards-compatible fallback).
 
 _S2_OWNER_HEADER_TEMPLATE = """\
 PROFILE OWNER: {owner_name}
@@ -485,7 +484,7 @@ as its subject — never invert.
 Before emitting a fact, rewrite any first-person sentence to third-person
 with {owner_name} as the subject:
   "I listed my condo"           -> "{owner_name} listed {owner_name}'s condo"
-  "Tom moved out"                -> "Tom moved out of {owner_name}'s residence"
+  "Kim moved out"                -> "Kim moved out of {owner_name}'s residence"
   "I got promoted to VP"         -> "{owner_name}'s role is VP of Engineering"
 
 NEVER emit a fact where {owner_name} is the object of a family/relationship
@@ -524,8 +523,8 @@ Thoroughness directive (read before every extraction):
   its own fact row — do not pack multiple claims into one content
   string.
 - For each fact, the content string should read as a complete
-  subject-predicate-object sentence (e.g. "Albert's wife is Sophie",
-  NOT just "Sophie"). The subject is almost always the profile owner
+  subject-predicate-object sentence (e.g. "Jamie's wife is Sam",
+  NOT just "Sam"). The subject is almost always the profile owner
   or a named associate.
 - If a message contains personal information, emit AT LEAST 3-5 facts
   whenever the message supports it. A typical personal message
@@ -537,10 +536,10 @@ Thoroughness directive (read before every extraction):
   0 facts. Do not invent.
 
 Worked example. Input message:
-  "My wife Sophie's birthday is coming up on the 22nd. She mentioned
+  "My wife Sam's birthday is coming up on the 22nd. She mentioned
    wanting to try The Ox restaurant in Bristol."
 This message contains THREE extractable facts (spouse identity,
-Sophie's birthday, Sophie's preference). All three must appear in the
+Sam's birthday, Sam's preference). All three must appear in the
 "facts" array of the same JSON object — ALWAYS wrap every fact inside
 {"facts": [...]} as shown in the schema above. A single unwrapped fact
 object is invalid output.
@@ -560,10 +559,10 @@ Rules:
   summarize "Scout" to "a puppy" or "Ember Coffee" to "a coffee business".
 - STATE TRANSITIONS: when the user describes a life-state CHANGE, extract
   the new STATE as a fact, not just the evidence. Examples:
-    "Tom moved out last month"            -> "User and Tom are separated"
+    "Kim moved out last month"            -> "User and Kim are separated"
     "I got promoted to VP of Engineering" -> "User's role is VP of Engineering"
     "we filed for divorce"                -> "User is divorced"
-    "I quit Nexus Health on Friday"       -> "User no longer works at Nexus Health"
+    "I quit Other Corp on Friday"         -> "User no longer works at Other Corp"
     "we decided not to get the dog"       -> "User decided against getting a dog"
   Use fact_type="temporal" for state transitions. The new state should
   contradict the prior state in writing form ("User is married" -> "User is
@@ -586,7 +585,7 @@ def _render_s2_prompt(owner_name: str) -> str:
     return _S2_EXTRACTION_BODY
 
 
-# ─── Cycle 26 Fix 1: ghost-fact validator ─────────────────────────────────────
+# ─── Ghost-fact validator ─────────────────────────────────────────────────────
 # Rejects S2-extracted facts whose shape indicates the writer inverted the
 # profile owner into another person's position. Two deterministic rules:
 #   1. identity collision  — owner appears as another person's spouse/relative
@@ -633,12 +632,11 @@ def _compile_ghost_patterns(owner_name: str) -> dict:
             r"(?:brother|sister|cousin|son|daughter)\s+"
             + first_esc + r"\b"
         ) if first_esc else None,
-        # Rule 4 (Cycle 28 Option B1): reject "owner lives with X" when X
-        # is a known relative. The relatives set is passed in at call
-        # time; empty set = rule is a no-op. Allows intervening qualifiers
-        # like "a neighbor named" before the capitalized name so
-        # "Mary Chen lives with a neighbor named Jake" still fires on
-        # "Jake".
+        # Rule 4: reject "owner lives with X" when X is a known
+        # relative. The relatives set is passed in at call time; empty
+        # set = rule is a no-op. Allows intervening qualifiers like "a
+        # neighbor named" before the capitalized name so "Jamie Rivera
+        # lives with a neighbor named Pat" still fires on "Pat".
         "pat4_head": re.compile(
             r"(?i)\b(?:user|" + first_esc + r"|" + full_esc + r")\s+"
             r"(?:lives?|lived|resides?|stays?|staying)\s+with\s+"
@@ -656,10 +654,9 @@ def _known_relative_first_names(store: Any, owner_entity_id: str) -> set[str]:
     with family-shaped relationship types, splits each target entity
     name on whitespace, and returns the lowercased first tokens.
 
-    Used by ghost validator Rule 4 (Cycle 28 Option B1) to reject
-    "owner lives with X" facts when X is a family member — family
-    cohabitation is encoded in the relationships graph, not as
-    residence slots.
+    Used by ghost validator Rule 4 to reject "owner lives with X"
+    facts when X is a family member — family cohabitation is encoded
+    in the relationships graph, not as residence slots.
 
     Returns an empty set when the store is unavailable, when no owner
     entity exists, or when no family edges have been written yet (early
@@ -681,7 +678,7 @@ def _known_relative_first_names(store: Any, owner_entity_id: str) -> set[str]:
             return names
         # Join relationships -> entities on the target side so we can
         # read the human-readable name. Owner entity_id is the canonical
-        # snake-case form from the Tier 2 classifier ("mary_chen").
+        # snake-case form from the Tier 2 classifier ("jamie_rivera").
         placeholders = ",".join("?" for _ in _FAMILY_REL_TYPES)
         rows = conn.execute(
             "SELECT e.name FROM relationships r "
@@ -708,7 +705,7 @@ def _validate_s2_fact(
     aliases: list[str],
     relatives: set[str] | None = None,
 ) -> tuple[bool, str | None]:
-    """Structural validator for S2-extracted facts (Cycle 26 Fix 1).
+    """Structural validator for S2-extracted facts.
 
     Returns (keep, reject_reason). When keep=False, reject_reason is a short
     rule tag ("identity", "duplicate", or "relative_cohabitation") used
@@ -729,14 +726,14 @@ def _validate_s2_fact(
     aliases_lower |= {owner_first.lower(), owner_name.lower()}
     pats = _compile_ghost_patterns(owner_name)
 
-    # Rule 1a: "(user|Mary|Mary Chen) is X's spouse/etc" where X is not the owner.
+    # Rule 1a: "(user|Jamie|Jamie Rivera) is X's spouse/etc" where X is not the owner.
     m = pats["pat1a"].search(content)
     if m:
         possessor = m.group("possessor").lower()
         if possessor not in aliases_lower:
             return (False, "identity")
 
-    # Rule 1b: "Mary (Chen) is (a) (twin|half-)? (brother|sister|...) (of|named|called) X"
+    # Rule 1b: "Jamie (Rivera) is (a) (twin|half-)? (brother|sister|...) (of|named|called) X"
     # Note: [A-Z][a-z]+ is effectively \w+ under (?i). A future editor should NOT
     # tighten this character class — S2 can emit lowercase names and we want
     # those rejected too.
@@ -745,20 +742,20 @@ def _validate_s2_fact(
 
     # Rule 3a: "named {owner_first}" — new entity introduced with owner's name.
     # Note: we intentionally do NOT check "called" here because colloquial
-    # phrasing like "we called Mary to discuss" would produce false positives.
+    # phrasing like "we called Jamie to discuss" would produce false positives.
     if pats["pat3a"] is not None and pats["pat3a"].search(content):
         return (False, "duplicate")
 
-    # Rule 3b: appositive form — "twin sister Mary", "brother Mary", etc.
+    # Rule 3b: appositive form — "twin sister Jamie", "brother Jamie", etc.
     if pats["pat3b"] is not None and pats["pat3b"].search(content):
         return (False, "duplicate")
 
-    # Rule 4 (Cycle 28 Option B1): "<owner> lives/resides/stays with <X>"
-    # where <X> is a known family-first-name. Two-stage regex: first
-    # find the head ("Mary Chen lives with "), then scan the tail for
-    # any capitalized first-name token. This way "Mary Chen lives with
-    # a neighbor named Jake" still catches "Jake". No-op when the
-    # relatives set is empty (e.g. early in a fresh reseed).
+    # Rule 4: "<owner> lives/resides/stays with <X>" where <X> is a
+    # known family-first-name. Two-stage regex: first find the head
+    # ("Jamie Rivera lives with "), then scan the tail for any
+    # capitalized first-name token. This way "Jamie Rivera lives with a
+    # neighbor named Pat" still catches "Pat". No-op when the relatives
+    # set is empty (e.g. early in a fresh reseed).
     if relatives:
         head = pats["pat4_head"].search(content)
         if head:
@@ -1023,13 +1020,13 @@ async def _s2_call_with_retries(
     return None
 
 
-# ── Episode summary (Cycle 30 Fix 2) ─────────────────────────────────────────
+# ── Episode summary ──────────────────────────────────────────────────────────
 #
-# Follow-up queries ("Going back to the mortgage…") regressed in the 30-day
-# run because episode text was just the first 300 chars of the user message
-# plus a short fact-list tail — no record of what was decided or how the
-# user responded. Upgrading to a 1-sentence LLM summary lifts F-category
-# accuracy from 0.62 toward baseline 0.88.
+# Follow-up queries ("Going back to the mortgage…") underperform when
+# episode text is just the first 300 chars of the user message plus a
+# short fact-list tail — there's no record of what was decided or how
+# the user responded. Upgrading to a 1-sentence LLM summary lifts
+# follow-up accuracy.
 #
 # Cost profile: one small LLM call per user turn, ~60-100 output tokens,
 # temperature=0. Fires async inside the writer (fire-and-forget) so the
@@ -1335,7 +1332,7 @@ def resolve_conflict(
         )
 
     # Otherwise the two facts are similar but semantically distinct (e.g.
-    # "works as software engineer" vs "works at Meridian Labs"). Coexist.
+    # "works as software engineer" vs "works at Example Labs"). Coexist.
     return ConflictResolution(
         action="store", new_status="current",
         new_confidence=new_fact.confidence,
@@ -1350,7 +1347,7 @@ def _content_equivalent(
     """Check if two fact contents are semantically equivalent (simple heuristic).
 
     Strips User/owner subject markers before comparing so the S1 path
-    ('User lives in X') and S2 path ('Albert Green lives in X') dedup
+    ('User lives in X') and S2 path ('Jamie Rivera lives in X') dedup
     against each other when ``owner_names`` is provided.
     """
     # Route through _strip_user_prefix so the owner-name handling is consistent
@@ -1360,7 +1357,7 @@ def _content_equivalent(
     )
 
 
-# Cycle 16 FIX_2: predicate-based contradiction detection.
+# Predicate-based contradiction detection.
 # Two facts contradict iff they bind the SAME value-predicate to DIFFERENT
 # objects. Topical/entity overlap alone is not enough.
 #
@@ -1380,10 +1377,10 @@ _VALUE_PREDICATES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^dislikes (.+)$"), "hates"),
     (re.compile(r"^drives a (.+)$"), "vehicle"),
     (re.compile(r"^owns a (.+)$"), "owns"),
-    # Cycle 16 FIX_4: collapse all job-state predicates (employer / role /
-    # occupation / position / offer-of-role) into a single key so changes
-    # contradict each other regardless of the surface verb. Capture key
-    # role/employer tokens after the verb.
+    # Collapse all job-state predicates (employer / role / occupation /
+    # position / offer-of-role) into a single key so changes contradict
+    # each other regardless of the surface verb. Capture key role/
+    # employer tokens after the verb.
     (re.compile(r"^works (?:at|for) (.+)$"), "job_state"),
     (re.compile(r"^works as (?:a |an )?(.+)$"), "job_state"),
     (re.compile(r"^is (?:a |an )?(.+? (?:engineer|manager|developer|designer|analyst|director|officer|lead|architect|consultant|teacher|professor|nurse|doctor|lawyer|founder|ceo|cto|cfo|coo|vp|pm))(?:\s+at\s+.+)?$"), "job_state"),
@@ -1427,7 +1424,7 @@ _PREFIX_STRIP = ("the user's ", "user's ", "the user ", "user ")
 
 def _strip_user_prefix(s: str, owner_names: list[str] | tuple[str, ...] | None = None) -> str:
     """Normalise a fact's subject: lowercase, strip trailing punctuation,
-    and remove a leading 'User' / 'Albert Green' / etc. marker.
+    and remove a leading 'User' / 'Jamie Rivera' / etc. marker.
 
     ``owner_names`` is an optional iterable of canonical names and
     aliases for the profile owner. Pass None (or empty) to match only
@@ -1442,8 +1439,8 @@ def _strip_user_prefix(s: str, owner_names: list[str] | tuple[str, ...] | None =
         if s.startswith(prefix):
             return s[len(prefix):]
     # Then owner-name variants: "<owner>'s " and "<owner> " forms.
-    # Order owners longest-first so "Albert Green" matches before "Albert"
-    # (otherwise "Albert Green's X" strips to "green's X").
+    # Order owners longest-first so "Jamie Rivera" matches before "Jamie"
+    # (otherwise "Jamie Rivera's X" strips to "rivera's X").
     if owner_names:
         ordered = sorted((n for n in owner_names if n), key=len, reverse=True)
         for name in ordered:
@@ -1472,8 +1469,8 @@ def _predicate_key(
 def _is_direct_contradiction(
     a: str, b: str, owner_names: list[str] | tuple[str, ...] | None = None,
 ) -> bool:
-    """Cycle 16 FIX_2: two facts contradict iff they bind the SAME value
-    predicate to DIFFERENT objects.
+    """Two facts contradict iff they bind the SAME value predicate to
+    DIFFERENT objects.
 
     Examples:
         "User lives in Sydney" vs "User lives in Melbourne"     → True
@@ -1481,11 +1478,11 @@ def _is_direct_contradiction(
         "User is 38 years old" vs "User is 39 years old"        → True
         "User is married"      vs "User is separated"           → True
         "User married 9 years" vs "User met at wedding 2014"    → False
-        "User is PM at Nexus"  vs "User joined Nexus 3 yrs ago" → False
-        "User has a pet Ethan" vs "User has a pet Tom"          → True
+        "User is PM at Acme"   vs "User joined Acme 3 yrs ago"  → False
+        "User has a pet Alex"  vs "User has a pet Kim"          → True
 
     ``owner_names`` lets the check canonicalise S2 facts written in
-    the owner-name form ("Albert Green's mortgage rate is …") so they
+    the owner-name form ("Jamie Rivera's mortgage rate is …") so they
     match their User-form counterparts.
     """
     pa = _predicate_key(a, owner_names=owner_names)
@@ -1627,7 +1624,7 @@ class MemoryWriter:
             stage2_enabled: ABL-S2 flag — set False for regex-only extraction.
             coherence_enabled: ABL-CI flag — set False to skip coherence scoring/quarantine.
             owner_name: Profile owner name pinned into the S2 prompt (empty = no pinning).
-            profile_owner_aliases: Additional name aliases for the profile owner (e.g. ["Mary", "I", "me"]).
+            profile_owner_aliases: Additional name aliases for the profile owner (e.g. ["Jamie", "I", "me"]).
             ghost_validator_enabled: Enable post-S2 ghost-fact structural validator.
         """
         self._store = store
@@ -1708,8 +1705,8 @@ class MemoryWriter:
         # Merge candidates (S1 first, S2 additions)
         all_candidates = s1_candidates + s2_candidates
 
-        # Cycle 16 FIX_3: drop pet/animal facts that name a known person.
-        # Catches "User has a pet named Tom" (Tom is the husband) and similar
+        # Drop pet/animal facts that name a known person. Catches
+        # "User has a pet named Kim" (Kim is the husband) and similar
         # entity-role confusion from S1 regex over-matching or S2 errors.
         _PET_RELATIONS = {"dog", "cat", "pet", "puppy", "kitten", "rabbit", "hamster", "bird", "parrot"}
         filtered: list[ExtractedFact] = []
@@ -1736,12 +1733,12 @@ class MemoryWriter:
                 filtered.append(cand)
         all_candidates = filtered
 
-        # Cycle 26 Fix 1: post-S2 ghost-fact validator — reject inverted
-        # identity and duplicate-name extractions from S2 output. S1 regex
-        # facts are shape-safe by construction and pass through unchecked.
+        # Post-S2 ghost-fact validator — reject inverted identity and
+        # duplicate-name extractions from S2 output. S1 regex facts are
+        # shape-safe by construction and pass through unchecked.
         if self._ghost_validator_enabled and self._owner_name and s2_candidates:
-            # Cycle 28 Option B1: compute the known-relatives set once
-            # per turn (not once per fact) so Rule 4 is O(1) per check.
+            # Compute the known-relatives set once per turn (not once
+            # per fact) so Rule 4 is O(1) per check.
             owner_canon = (
                 self._owner_name.lower().replace(" ", "_") or ""
             )
@@ -1834,9 +1831,10 @@ class MemoryWriter:
                 except Exception as exc:
                     logger.warning("Embedding failed for '%s': %s", fact.content[:40], exc)
 
-            # Cycle 28 Tier 2 classification: feed the readable content string
-            # through gemma4:e4b to derive structured tags. Fail-open: on any
-            # classifier error we write the fact with NULL structured columns.
+            # Tier 2 classification: feed the readable content string
+            # through gemma4:e4b to derive structured tags. Fail-open:
+            # on any classifier error we write the fact with NULL
+            # structured columns.
             _v2_kwargs: dict[str, str | None] = {}
             if self._tier2_classifier_enabled:
                 try:
@@ -1849,13 +1847,14 @@ class MemoryWriter:
                     if tags.is_populated:
                         # Subject canonicalisation: if the owner's name
                         # appears inside the classifier's subject string
-                        # (e.g. "Mary Chen and Tom", "Mary Chen's boys"),
-                        # collapse the whole thing to the owner's subject
-                        # so slot_key lookups from retrieval hit. This
-                        # keeps "mary_chen:marital_status" as the one
+                        # (e.g. "Jamie Rivera and Kim", "Jamie Rivera's
+                        # boys"), collapse the whole thing to the
+                        # owner's subject so slot_key lookups from
+                        # retrieval hit. This keeps
+                        # "jamie_rivera:marital_status" as the one
                         # authoritative row instead of scattering facts
-                        # across {mary_chen, mary_chen_and_tom,
-                        # mary_chens_boys, ...}.
+                        # across {jamie_rivera, jamie_rivera_and_kim,
+                        # jamie_riveras_boys, ...}.
                         raw_subj = (tags.subject or "").strip()
                         subj_lower = raw_subj.lower()
                         owner_lower = (self._owner_name or "").lower()
@@ -1886,18 +1885,18 @@ class MemoryWriter:
                 continue
 
             # S3: Conflict resolution — find existing similar facts.
-            # Cycle 16 FIX_4: top-1 nearest neighbour misses the actual
-            # contradicting fact when several semantically-related facts
-            # exist (e.g. "User's role is VP of Product" inserted while
-            # "PM at Nexus", "interviewing for VP", "Senior PM at Meridian"
-            # all exist — top-1 picks the interview fact, not the PM fact).
+            # Top-1 nearest neighbour misses the actual contradicting
+            # fact when several semantically-related facts exist (e.g.
+            # "User's role is VP of Product" inserted while "PM at Acme",
+            # "interviewing for VP", "Senior PM at Example" all exist —
+            # top-1 picks the interview fact, not the PM fact).
             #
             # New strategy: fetch top-K candidates, then prefer (in order):
             #   1. an exact content-equivalent (boost path)
             #   2. a value-predicate contradiction (supersede path)
             #   3. otherwise, top-1 (legacy behaviour: coexist as similar)
             existing_match = None
-            # Owner-name canonicalisation so S2's "Albert Green's X is Y"
+            # Owner-name canonicalisation so S2's "Jamie Rivera's X is Y"
             # facts match S1's "User's X is Y" facts during boost/supersede.
             _owner_names = [n for n in ([self._owner_name] + list(self._owner_aliases)) if n]
             if embedding:
@@ -2094,10 +2093,10 @@ class MemoryWriter:
     ) -> None:
         """Persist a compressed record of this turn.
 
-        Cycle 30 Fix 2: when an assistant reply is available, request a
-        one-sentence LLM summary of the exchange (what was discussed,
-        what was decided, the user's stance). Falls back to the
-        legacy 300-char truncation + fact-list tail on any failure so
+        When an assistant reply is available, request a one-sentence
+        LLM summary of the exchange (what was discussed, what was
+        decided, the user's stance). Falls back to the legacy 300-char
+        truncation + fact-list tail on any failure so
         cold-start / offline scenarios still emit episodes.
         Embedding = embed(episode summary, first 512 chars).
         Fail-open: all errors logged and swallowed.
@@ -2151,7 +2150,7 @@ class MemoryWriter:
             logger.warning("Episode insert failed (non-fatal): %s", exc)
 
     def _is_known_person(self, name: str) -> bool:
-        """Cycle 16 FIX_3: check if a name is already known as a person.
+        """Check if a name is already known as a person.
         Used to block 'pet named X' facts when X is the spouse, child, etc.
         """
         if not name:

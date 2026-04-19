@@ -1,4 +1,4 @@
-"""Tests for Cycle 30 Fix 3: query decomposition for multi-hop retrieval."""
+"""Tests for query decomposition in multi-hop retrieval."""
 from __future__ import annotations
 
 import json

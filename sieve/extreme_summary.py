@@ -1,4 +1,4 @@
-"""Cycle 28 EXTREME summariser.
+"""EXTREME summariser.
 
 When an inbound request carries a very large static payload (>25K tokens
 of identity / workspace files / prior turns that Recall is about to
@@ -9,8 +9,8 @@ This gives the downstream model the temporal/causal reasoning depth
 that purely slot-based retrieval can't provide, without shipping the
 original 42K tokens. A ~500-token summary is still a >95% reduction.
 
-WARNING: summaries are NOT authoritative. Phase 0 validation caught
-the summariser conflating "Dana is pregnant" into "Mary is pregnant".
+WARNING: summaries are NOT authoritative. Validation testing caught
+the summariser conflating "Dana is pregnant" into "Jamie is pregnant".
 The cardinal rules header still forces the model to trust [CURRENT]
 slot facts over anything in the summary, so conflicts resolve in favor
 of structured data. The summary is additive, not primary.

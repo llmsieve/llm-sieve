@@ -101,7 +101,7 @@ async def test_s2_uses_ollama_format_first(httpx_mock):
         provider_base_url=base,
         model="qwen3:30b-a3b",
         fallback_model="qwen3:30b-a3b",
-        owner_name="Albert",
+        owner_name="Jamie",
     )
 
     assert len(facts) == 1
@@ -148,7 +148,7 @@ async def test_s2_falls_back_to_openai_format_on_400(httpx_mock):
         provider_base_url=base,
         model="gpt-4o-mini",
         fallback_model="gpt-4o-mini",
-        owner_name="Albert",
+        owner_name="Jamie",
     )
 
     assert len(facts) == 1
@@ -190,7 +190,7 @@ async def test_s2_falls_back_on_422(httpx_mock):
     assert facts == []
 
 
-# ─── Episode summary (Cycle 30 Fix 2) ──────────────────────────────────────
+# ─── Episode summary ───────────────────────────────────────────────────────
 
 
 async def test_summarize_episode_returns_llm_sentence(httpx_mock):

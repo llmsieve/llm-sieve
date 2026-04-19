@@ -1,4 +1,4 @@
-"""Cycle 27 T10+T11: v2 context formatter.
+"""v2 context formatter.
 
 Renders the 5-section template validated by the Step 1 ceiling probe:
 

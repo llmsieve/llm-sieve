@@ -1,14 +1,13 @@
-"""Cycle 28 Tier 2 fact classifier.
+"""Tier 2 fact classifier.
 
 Takes a free-text fact (a readable sentence the existing writer already
 produces well) and classifies it into structured tags — subject,
 predicate, object, category — using gemma4:e4b via Ollama native
 `/api/generate` with format=JSON schema.
 
-This module exists because Cycle 27 proved that forcing qwen3.5:2b/4b
-to produce structured slots AND readable content in one shot makes it
-hallucinate values to fill slots it doesn't understand. The Cycle 28
-fix is to separate concerns:
+This module exists because forcing qwen3.5:2b/4b to produce structured
+slots AND readable content in one shot makes it hallucinate values to
+fill slots it doesn't understand. The fix is to separate concerns:
 
 - Tier 1 writer (qwen3.5:4b, existing) -> content column (readable sentence)
 - Tier 2 classifier (gemma4:e4b, this module) -> structured columns
@@ -96,7 +95,7 @@ class FactClassification:
 
 
 def _slot_key_for(subject: str | None, predicate: str | None) -> str | None:
-    """Produce a canonical slot_key like 'mary_chen:employer' or None."""
+    """Produce a canonical slot_key like 'jamie_rivera:employer' or None."""
     if not subject or not predicate:
         return None
     sub = subject.strip().lower().replace(" ", "_")

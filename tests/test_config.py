@@ -72,13 +72,13 @@ def test_profile_owner_loaded_from_yaml(tmp_path):
     p = tmp_path / "sieve.yaml"
     p.write_text(yaml.safe_dump({
         "profile_owner": {
-            "name": "Mary Chen",
-            "aliases": ["Mary", "I", "me", "the user"],
+            "name": "Jamie Rivera",
+            "aliases": ["Jamie", "I", "me", "the user"],
         }
     }))
     cfg = RecallConfig.load(p)
-    assert cfg.profile_owner.name == "Mary Chen"
-    assert "Mary" in cfg.profile_owner.aliases
+    assert cfg.profile_owner.name == "Jamie Rivera"
+    assert "Jamie" in cfg.profile_owner.aliases
     assert "the user" in cfg.profile_owner.aliases
 
 
@@ -127,7 +127,7 @@ def test_retrieval_temporal_dedup_can_be_disabled(tmp_path):
 
 
 def test_schema_v2_flag_default_off():
-    """Cycle 27: schema_v2 must default to False — new code paths gated."""
+    """schema_v2 must default to False — new code paths gated."""
     from sieve.config import RecallConfig
     cfg = RecallConfig()
     assert cfg.ablation.schema_v2 is False

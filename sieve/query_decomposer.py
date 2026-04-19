@@ -1,9 +1,9 @@
-"""Cycle 30 Fix 3: query decomposition for multi-hop retrieval.
+"""Query decomposition for multi-hop retrieval.
 
 Multi-hop queries ("Given Dad's eye condition, Mum's driving, and our
-location, should they move closer?") regressed in the 30-day run (M
-accuracy 0.55 vs baseline 0.91) because a single top-K vector search
-returns similar facts rather than the logically required mix.
+location, should they move closer?") underperform when a single top-K
+vector search returns similar facts rather than the logically required
+mix.
 
 Fix: ask a small LLM to break the query into 2-4 independent
 sub-questions, run top-3 vector search per sub-question, deduplicate

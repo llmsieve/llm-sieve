@@ -124,11 +124,11 @@ def test_owner_pin_preserved_from_explicit_arg(config, cache):
     decomposed = decompose(payload, cache, api_format="ollama")
     lean = compose_lean_payload(
         payload, decomposed, config,
-        profile_owner_pin="Albert Green is a 41-year-old civil engineer.",
+        profile_owner_pin="Jamie Rivera is a 41-year-old civil engineer.",
     )
     sys_text = lean["messages"][0]["content"]
     assert sys_text.startswith(LEAN_SYSTEM_PROMPT)
-    assert "Albert Green is a 41-year-old civil engineer." in sys_text
+    assert "Jamie Rivera is a 41-year-old civil engineer." in sys_text
 
 
 def test_owner_pin_detected_from_inbound_system_prompt(config, cache):
@@ -138,7 +138,7 @@ def test_owner_pin_detected_from_inbound_system_prompt(config, cache):
         "messages": [
             {"role": "system", "content": (
                 "You are a helpful AI assistant. "
-                "The person speaking is Albert Green, a 41-year-old civil "
+                "The person speaking is Jamie Rivera, a 41-year-old civil "
                 "engineer living in Bristol. Answer clearly."
             )},
             {"role": "user", "content": "What's on my calendar?"},
@@ -147,7 +147,7 @@ def test_owner_pin_detected_from_inbound_system_prompt(config, cache):
     decomposed = decompose(payload, cache, api_format="ollama")
     lean = compose_lean_payload(payload, decomposed, config)
     sys_text = lean["messages"][0]["content"]
-    assert "Albert Green" in sys_text
+    assert "Jamie Rivera" in sys_text
 
 
 def test_no_owner_pin_leaves_lean_prompt_clean(config, cache):
@@ -166,7 +166,7 @@ def test_no_owner_pin_leaves_lean_prompt_clean(config, cache):
 
 
 def test_pure_general_uses_general_prompt(config, cache):
-    """Cycle 30 Fix 1: pure_general=True swaps to GENERAL_LEAN_SYSTEM_PROMPT.
+    """pure_general=True swaps to GENERAL_LEAN_SYSTEM_PROMPT.
 
     Pure general-knowledge queries should never see memory-focused framing;
     the model answers from its own knowledge.
@@ -188,14 +188,14 @@ def test_pure_general_uses_general_prompt(config, cache):
 
 
 def test_pure_general_drops_owner_pin(config, cache):
-    """Fix 1: pure-G queries drop the owner pin — identity grounding is
+    """pure-G queries drop the owner pin — identity grounding is
     irrelevant when the question is general knowledge."""
     payload = {
         "model": "qwen3.5:35b",
         "messages": [
             {"role": "system", "content": (
                 "You are a helpful AI assistant. "
-                "The person speaking is Albert Green, a 41-year-old civil "
+                "The person speaking is Jamie Rivera, a 41-year-old civil "
                 "engineer living in Bristol. Answer clearly."
             )},
             {"role": "user", "content": "What is 2+2?"},
@@ -204,12 +204,12 @@ def test_pure_general_drops_owner_pin(config, cache):
     decomposed = decompose(payload, cache, api_format="ollama")
     lean = compose_lean_payload(
         payload, decomposed, config,
-        profile_owner_pin="Albert Green is a 41-year-old civil engineer.",
+        profile_owner_pin="Jamie Rivera is a 41-year-old civil engineer.",
         pure_general=True,
     )
     sys_text = lean["messages"][0]["content"]
     assert sys_text == GENERAL_LEAN_SYSTEM_PROMPT
-    assert "Albert Green" not in sys_text
+    assert "Jamie Rivera" not in sys_text
 
 
 def test_pure_general_default_false_uses_memory_prompt(config, cache):

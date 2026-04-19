@@ -1,4 +1,4 @@
-"""Cycle 19: Response Verification Layer tests."""
+"""Response Verification Layer tests."""
 from __future__ import annotations
 
 import pytest
@@ -31,19 +31,19 @@ def store(tmp_path):
 
 @pytest.fixture
 def populated_store(store):
-    """Store with the user, twin boys (Jake, Ethan), and a husband (Tom),
-    plus enough filler facts to clear the Fix-4 coverage gate
+    """Store with the user, twin boys (Pat, Alex), and a husband (Kim),
+    plus enough filler facts to clear the coverage gate
     (facts ≥ 100, ≥ 3 family entities → coverage score > 0.5)."""
     user_id = store.insert_entity("User", type="person")
-    jake_id = store.insert_entity("Jake", type="person")
-    ethan_id = store.insert_entity("Ethan", type="person")
-    tom_id = store.insert_entity("Tom", type="person")
+    jake_id = store.insert_entity("Pat", type="person")
+    ethan_id = store.insert_entity("Alex", type="person")
+    tom_id = store.insert_entity("Kim", type="person")
     store.insert_relationship(user_id, "son", jake_id, confidence=0.9)
     store.insert_relationship(user_id, "son", ethan_id, confidence=0.9)
     store.insert_relationship(user_id, "husband", tom_id, confidence=0.9)
-    store.insert_fact("User has twin boys named Jake and Ethan", confidence=0.9)
-    store.insert_fact("User's husband is Tom", confidence=0.9)
-    # Fix-4 gate: seed 100 filler facts so facts_score saturates at 1.0.
+    store.insert_fact("User has twin boys named Pat and Alex", confidence=0.9)
+    store.insert_fact("User's husband is Kim", confidence=0.9)
+    # Coverage gate: seed 100 filler facts so facts_score saturates at 1.0.
     for i in range(100):
         store.insert_fact(f"Filler fact #{i} about the user.", confidence=0.8)
     return store
@@ -71,16 +71,16 @@ def high_coverage_store(store):
 
 class TestExtractRelationshipWords:
     def test_finds_daughter(self):
-        assert "daughter" in _extract_relationship_words("Tell me about Mary's daughter")
+        assert "daughter" in _extract_relationship_words("Tell me about Jamie's daughter")
 
     def test_finds_son(self):
-        assert "son" in _extract_relationship_words("How is Mary's son doing?")
+        assert "son" in _extract_relationship_words("How is Jamie's son doing?")
 
     def test_finds_dog(self):
-        assert "dog" in _extract_relationship_words("What breed is Mary's dog?")
+        assert "dog" in _extract_relationship_words("What breed is Jamie's dog?")
 
     def test_no_false_positive(self):
-        assert _extract_relationship_words("What is Mary's job?") == set()
+        assert _extract_relationship_words("What is Jamie's job?") == set()
 
     def test_word_boundaries(self):
         # 'sonatina' should not match 'son'
@@ -89,16 +89,16 @@ class TestExtractRelationshipWords:
 
 class TestExtractQueryProperNouns:
     def test_extracts_name(self):
-        nouns = _extract_query_proper_nouns("What's Tom's salary?")
-        assert "Tom" in nouns
+        nouns = _extract_query_proper_nouns("What's Kim's salary?")
+        assert "Kim" in nouns
 
     def test_skips_question_words(self):
-        nouns = _extract_query_proper_nouns("Tell me about Mary")
+        nouns = _extract_query_proper_nouns("Tell me about Jamie")
         assert "Tell" not in nouns
 
     def test_skips_user_self(self):
-        nouns = _extract_query_proper_nouns("Where does Mary live?")
-        assert "Mary" not in nouns
+        nouns = _extract_query_proper_nouns("Where does Jamie live?")
+        assert "Jamie" not in nouns
 
 
 # ─── Layer 1: build_absence_signals ───────────────────────────────────────────
@@ -107,12 +107,12 @@ class TestExtractQueryProperNouns:
 class TestBuildAbsenceSignals:
     def test_no_signals_when_relationship_known(self, populated_store):
         # 'son' is in the store, no signal needed
-        signals = build_absence_signals("Tell me about Mary's son", [], populated_store)
+        signals = build_absence_signals("Tell me about Jamie's son", [], populated_store)
         rels = [s for s in signals if s.reason == "relationship_word"]
         assert rels == []
 
     def test_signal_for_unknown_daughter(self, populated_store):
-        signals = build_absence_signals("Tell me about Mary's daughter", [], populated_store)
+        signals = build_absence_signals("Tell me about Jamie's daughter", [], populated_store)
         texts = [s.text for s in signals]
         assert any("daughter" in t for t in texts)
 
@@ -123,9 +123,9 @@ class TestBuildAbsenceSignals:
         assert any("Derek" in t and "not in" in t for t in texts)
 
     def test_no_signal_for_known_person(self, populated_store):
-        signals = build_absence_signals("What is Tom doing?", [], populated_store)
-        # Tom is in the store
-        assert all("Tom" not in s.text for s in signals)
+        signals = build_absence_signals("What is Kim doing?", [], populated_store)
+        # Kim is in the store
+        assert all("Kim" not in s.text for s in signals)
 
     def test_no_signal_when_in_retrieved_facts(self, populated_store):
         # If Derek appears in retrieved facts, no signal even if not in store
@@ -145,7 +145,7 @@ class TestBuildAbsenceSignals:
         assert all("daughter" not in s.text for s in signals), [s.text for s in signals]
 
     def test_possessive_wife_assertion_suppresses(self, store):
-        query = "My wife Sophie's birthday is on the 22nd."
+        query = "My wife Sam's birthday is on the 22nd."
         signals = build_absence_signals(query, [], store)
         assert all("wife" not in s.text for s in signals), [s.text for s in signals]
 
@@ -172,14 +172,14 @@ class TestBuildAbsenceSignals:
         assert all("daughter" not in s.text for s in signals)
 
     def test_trap_query_still_fires_when_no_evidence(self, high_coverage_store):
-        """Classic trap ('What was the name of Albert's cat again?') has
+        """Classic trap ('What was the name of Dana's cat again?') has
         no assertion, no fact, no recent turn — must still fire once the
         store has enough coverage to be authoritative about pets.
 
-        Cycle 30 Fix 4: on a sparse / cold-start store the signal is
-        (correctly) suppressed — see test_sparse_store_suppresses_trap
-        below. The mature-store case uses the high_coverage fixture
-        (100+ facts, 3+ family entities → coverage > 0.5)."""
+        On a sparse / cold-start store the signal is (correctly)
+        suppressed — see test_sparse_store_suppresses_trap below. The
+        mature-store case uses the high_coverage fixture (100+ facts,
+        3+ family entities → coverage > 0.5)."""
         # Seed a pet entity so pet category has coverage too. Without this,
         # pet category score stays 0 and the signal is silenced even on a
         # mature store — which is actually correct behaviour in general
@@ -195,24 +195,24 @@ class TestBuildAbsenceSignals:
         high_coverage_store.insert_relationship(user_id, "dog", goldie_id, confidence=0.9)
         high_coverage_store.insert_relationship(user_id, "dog", bubba_id, confidence=0.9)
         high_coverage_store.insert_relationship(user_id, "cat", whiskers_id, confidence=0.9)
-        # The user has cats/dogs but no entity named "Albert's cat". The
+        # The user has cats/dogs but no entity named "Dana's cat". The
         # "cat" relationship is in the store, so the relationship-word
         # signal is correctly suppressed. The proper-noun check fires on
-        # "Albert" (not a known entity, not in facts). Accept either
+        # "Dana" (not a known entity, not in facts). Accept either
         # signal type — the point of this test is that a mature store
         # with a trap query still produces at least one negative signal.
         signals = build_absence_signals(
-            "What was the name of Albert's cat again?",
+            "What was the name of Dana's cat again?",
             [], high_coverage_store, recent_turns=[],
         )
         assert signals, f"trap query failed to fire on mature store: {signals}"
 
     def test_sparse_store_suppresses_trap(self, store):
-        """Cycle 30 Fix 4: on a cold-start store the trap query is
-        intentionally silenced. Days 1–5 don't have enough evidence to
-        claim authority over what the user does/doesn't have."""
+        """On a cold-start store the trap query is intentionally
+        silenced. Early days don't have enough evidence to claim
+        authority over what the user does/doesn't have."""
         signals = build_absence_signals(
-            "What was the name of Albert's cat again?",
+            "What was the name of Dana's cat again?",
             [], store, recent_turns=[],
         )
         assert signals == [], \
@@ -253,8 +253,8 @@ class TestBuildAbsenceSignals:
 class TestVerifyResponse:
     def test_clean_response_with_known_entities(self, populated_store):
         v = verify_response(
-            "Who is Tom?",
-            "Tom is the user's husband.",
+            "Who is Kim?",
+            "Kim is the user's husband.",
             populated_store,
         )
         assert v.is_clean
@@ -273,8 +273,8 @@ class TestVerifyResponse:
         # v2: refusal text no longer short-circuits, but a pure refusal
         # mentioning no entities or unknown relationships should still be clean.
         v = verify_response(
-            "What is Tom's salary?",
-            "I don't have information about Tom's salary in my context.",
+            "What is Kim's salary?",
+            "I don't have information about Kim's salary in my context.",
             populated_store,
         )
         assert v.is_clean
@@ -293,13 +293,13 @@ class TestVerifyResponse:
         v = verify_response("anything", "", populated_store)
         assert v.is_clean
 
-    # Cycle 19 pass 3: Layer 3 v2 catches relationship-word claims about
-    # relationships the user does not have.
+    # Layer 3 v2 catches relationship-word claims about relationships
+    # the user does not have.
     def test_v2_catches_daughter_claim(self, populated_store):
-        # User has twin boys Jake/Ethan, no daughter. Response asserts a daughter.
+        # User has twin boys Pat/Alex, no daughter. Response asserts a daughter.
         v = verify_response(
-            "Tell me about Mary's daughter",
-            "Mary's daughter Sarah is 8 years old and loves soccer.",
+            "Tell me about Jamie's daughter",
+            "Jamie's daughter Sarah is 8 years old and loves soccer.",
             populated_store,
         )
         assert not v.is_clean
@@ -308,8 +308,8 @@ class TestVerifyResponse:
     def test_v2_negation_about_unknown_relation_is_clean(self, populated_store):
         # If the response correctly says there is no daughter, that is clean.
         v = verify_response(
-            "Tell me about Mary's daughter",
-            "There is no daughter on record for Mary.",
+            "Tell me about Jamie's daughter",
+            "There is no daughter on record for Jamie.",
             populated_store,
         )
         assert v.is_clean
@@ -318,15 +318,15 @@ class TestVerifyResponse:
         # The model says "I don't know" then hallucinates anyway — v1 would
         # short-circuit on the refusal; v2 should still catch the rest.
         v = verify_response(
-            "Tell me about Mary's daughter",
-            "I don't have specific details. Mary's daughter Sarah was born in 2018.",
+            "Tell me about Jamie's daughter",
+            "I don't have specific details. Jamie's daughter Sarah was born in 2018.",
             populated_store,
         )
         assert not v.is_clean
         assert "daughter" in v.flagged_relations
 
     def test_known_entity_in_facts_passes(self, populated_store):
-        facts = [{"content": "User has a colleague Marcus Webb at Meridian"}]
+        facts = [{"content": "User has a colleague Marcus Webb at Example"}]
         v = verify_response(
             "Who works with the user?",
             "The user has a colleague Marcus Webb.",

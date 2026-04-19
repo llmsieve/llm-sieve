@@ -42,9 +42,9 @@ OLLAMA_DEFAULT_DIM = 768
 # in-process with no network so no retry is needed there.
 _OLLAMA_RETRY_DELAYS_S = (1.0, 2.0, 4.0)
 
-# Cycle 30 Fix 5: cross-encoder reranker defaults. MiniLM-L-6-v2 is the
-# smallest option supported by FastEmbed (~80MB), fast on CPU (~20-50ms
-# for 10 candidates), and empirically strong for short-text re-ranking.
+# Cross-encoder reranker defaults. MiniLM-L-6-v2 is the smallest option
+# supported by FastEmbed (~80MB), fast on CPU (~20-50ms for 10
+# candidates), and empirically strong for short-text re-ranking.
 FASTEMBED_RERANK_DEFAULT_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
 
 
@@ -177,7 +177,7 @@ class EmbeddingService:
 
 
 class RerankerService:
-    """Cycle 30 Fix 5: cross-encoder re-ranker over vector search candidates.
+    """Cross-encoder re-ranker over vector search candidates.
 
     FastEmbed's TextCrossEncoder runs an ONNX cross-encoder model in-process
     on CPU. Typical MiniLM-L-6-v2 takes ~20-50ms for 10 (query, passage)

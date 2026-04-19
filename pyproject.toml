@@ -43,6 +43,9 @@ dev = [
     "pytest-httpx>=0.35",
     "ruff>=0.8",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+]
 
 [project.scripts]
 sieve = "sieve.cli:main"

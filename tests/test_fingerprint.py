@@ -373,11 +373,11 @@ def test_decompose_time_tracked(cache):
     assert result.decompose_time_us >= 0
 
 
-# --- Simulated OpenClaw bloated payload ---
+# --- Simulated bloated agent-framework payload ---
 
 
-def test_openclaw_bloated_payload(cache):
-    """Simulate a realistic OpenClaw payload (~47k tokens) and verify decomposition."""
+def test_bloated_agent_framework_payload(cache):
+    """Simulate a realistic agent-framework payload (~47k tokens) and verify decomposition."""
     big_system = "You are an AI assistant with extensive capabilities. " * 500  # ~4000 tokens
     big_tools = [
         {

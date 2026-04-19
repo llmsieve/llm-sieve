@@ -60,7 +60,7 @@ class EmbeddingClient:
         else:
             # Ollama backend. URL/model default to the values already
             # configured for the main provider + store so that existing
-            # recall.albert.yaml-style configs keep working unchanged.
+            # existing recall.yaml-style configs keep working unchanged.
             self._service = EmbeddingService(
                 provider="ollama",
                 ollama_url=config.embeddings.ollama_url or config.provider.base_url,

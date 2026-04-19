@@ -70,7 +70,7 @@ def check_auth(request: Request, expected_token: str) -> JSONResponse | None:
         return None
 
     # Validation harness endpoints are local-loopback by design (the
-    # Albert Green harness runs on a single host). Leaving them gated
+    # validation harness runs on a single host). Leaving them gated
     # behind the auth token would force the runner to scrape
     # ``~/.sieve/.sieve_auth_token``; exempting them here keeps the
     # plumbing simple without weakening production security, since

@@ -1,4 +1,4 @@
-"""Cycle 27 T2: schema v2 migration + CRUD tests.
+"""Schema v2 migration + CRUD tests.
 
 Verifies:
 - Fresh DBs get all v2 columns via SCHEMA_SQL.
@@ -78,10 +78,10 @@ def test_init_schema_is_idempotent(fresh_store: MemoryStore) -> None:
 
 
 def test_known_unknown_insert_is_idempotent(fresh_store: MemoryStore) -> None:
-    a = fresh_store.insert_known_unknown("mary_chen", "mother_first_name", "asked_by_llm")
-    b = fresh_store.insert_known_unknown("mary_chen", "mother_first_name", "asked_by_llm")
+    a = fresh_store.insert_known_unknown("jamie_rivera", "mother_first_name", "asked_by_llm")
+    b = fresh_store.insert_known_unknown("jamie_rivera", "mother_first_name", "asked_by_llm")
     assert a == b
-    rows = fresh_store.get_known_unknowns("mary_chen")
+    rows = fresh_store.get_known_unknowns("jamie_rivera")
     assert len(rows) == 1
     assert rows[0]["slot_key"] == "mother_first_name"
     assert rows[0]["reason"] == "asked_by_llm"
@@ -110,36 +110,36 @@ def _seed_slot_fact(
 def test_get_current_slot_fact_returns_latest(fresh_store: MemoryStore) -> None:
     _seed_slot_fact(
         fresh_store,
-        content="Mary Chen is a product manager at Nexus Health",
-        slot_key="mary_chen:employer",
+        content="Jamie Rivera is a product manager at Other Corp",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
-        object_literal="Nexus Health",
+        object_literal="Other Corp",
         valid_from="2024-01-01",
         valid_to="2026-04-01",
     )
     new_id = _seed_slot_fact(
         fresh_store,
-        content="Mary Chen is VP of Product at Meridian Health",
-        slot_key="mary_chen:employer",
+        content="Jamie Rivera is VP of Product at Example Corp",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
-        object_literal="Meridian Health",
+        object_literal="Example Corp",
         valid_from="2026-04-01",
     )
-    current = fresh_store.get_current_slot_fact("mary_chen:employer")
+    current = fresh_store.get_current_slot_fact("jamie_rivera:employer")
     assert current is not None
     assert current["id"] == new_id
-    assert current["object_literal"] == "Meridian Health"
+    assert current["object_literal"] == "Example Corp"
 
 
 def test_get_current_slot_fact_returns_none_when_absent(fresh_store: MemoryStore) -> None:
-    assert fresh_store.get_current_slot_fact("mary_chen:employer") is None
+    assert fresh_store.get_current_slot_fact("jamie_rivera:employer") is None
 
 
 def test_get_slot_timeline_returns_all_versions(fresh_store: MemoryStore) -> None:
     _seed_slot_fact(
         fresh_store,
         content="analyst at State Street",
-        slot_key="mary_chen:employer",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
         object_literal="State Street",
         valid_from="2020-01-01",
@@ -147,43 +147,43 @@ def test_get_slot_timeline_returns_all_versions(fresh_store: MemoryStore) -> Non
     )
     _seed_slot_fact(
         fresh_store,
-        content="PM at Nexus Health",
-        slot_key="mary_chen:employer",
+        content="PM at Other Corp",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
-        object_literal="Nexus Health",
+        object_literal="Other Corp",
         valid_from="2024-01-01",
         valid_to="2026-04-01",
     )
     _seed_slot_fact(
         fresh_store,
-        content="VP Product at Meridian",
-        slot_key="mary_chen:employer",
+        content="VP Product at Example",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
-        object_literal="Meridian Health",
+        object_literal="Example Corp",
         valid_from="2026-04-01",
     )
-    timeline = fresh_store.get_slot_timeline("mary_chen:employer")
-    assert [t["object_literal"] for t in timeline] == ["State Street", "Nexus Health", "Meridian Health"]
+    timeline = fresh_store.get_slot_timeline("jamie_rivera:employer")
+    assert [t["object_literal"] for t in timeline] == ["State Street", "Other Corp", "Example Corp"]
 
 
 def test_supersede_slot_marks_prior_rows(fresh_store: MemoryStore) -> None:
     old = _seed_slot_fact(
         fresh_store,
-        content="Nexus Health",
-        slot_key="mary_chen:employer",
+        content="Other Corp",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
-        object_literal="Nexus Health",
+        object_literal="Other Corp",
         valid_from="2024-01-01",
     )
     new = _seed_slot_fact(
         fresh_store,
-        content="Meridian Health",
-        slot_key="mary_chen:employer",
+        content="Example Corp",
+        slot_key="jamie_rivera:employer",
         predicate="employer",
-        object_literal="Meridian Health",
+        object_literal="Example Corp",
         valid_from="2026-04-01",
     )
-    updated = fresh_store.supersede_slot("mary_chen:employer", new, "2026-04-01")
+    updated = fresh_store.supersede_slot("jamie_rivera:employer", new, "2026-04-01")
     assert updated == 1
     row = fresh_store.conn.execute(
         "SELECT valid_to, superseded_by FROM facts WHERE id = ?", (old,)
@@ -191,5 +191,5 @@ def test_supersede_slot_marks_prior_rows(fresh_store: MemoryStore) -> None:
     assert row[0] == "2026-04-01"
     assert row[1] == new
     # Current-slot query now returns only the new row
-    current = fresh_store.get_current_slot_fact("mary_chen:employer")
+    current = fresh_store.get_current_slot_fact("jamie_rivera:employer")
     assert current["id"] == new

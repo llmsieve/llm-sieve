@@ -286,10 +286,10 @@ class TestContentHelpers:
         assert not _is_numeric_content("User lives in Dubai")
 
 
-# ─── Cycle 16 FIX_2: predicate-based contradiction ──────────────────────────
+# ─── Predicate-based contradiction ──────────────────────────────────────────
 
 class TestPredicateContradiction:
-    """Cycle 16 FIX_2: contradictions must be same-predicate, different-object."""
+    """Contradictions must be same-predicate, different-object."""
 
     def _check(self, a: str, b: str) -> bool:
         from sieve.writer import _is_direct_contradiction
@@ -305,29 +305,29 @@ class TestPredicateContradiction:
     def test_age_change_contradicts(self):
         assert self._check("User is 39 years old", "User is 38 years old")
 
-    # Cycle 16 audit failures: must NOT contradict
+    # Audit failures: must NOT contradict
     def test_marriage_duration_vs_origin_does_not_contradict(self):
         # The bug from the audit: "married for 9 years" was being superseded
         # by "met at a wedding in 2014" because they shared topical tokens.
         assert not self._check(
-            "The user and Tom have been married for nine years",
-            "The user and Tom met at a friend's wedding in 2014",
+            "The user and Kim have been married for nine years",
+            "The user and Kim met at a friend's wedding in 2014",
         )
 
     def test_role_vs_joining_date_does_not_contradict(self):
-        # "Mary Chen is a product manager at Nexus Health" vs
-        # "Mary Chen joined Nexus Health three years ago" — different facts,
+        # "Jamie Rivera is a product manager at Other Corp" vs
+        # "Jamie Rivera joined Other Corp three years ago" — different facts,
         # both true.
         assert not self._check(
-            "Mary Chen is a product manager at Nexus Health",
-            "Mary Chen joined Nexus Health three years ago",
+            "Jamie Rivera is a product manager at Other Corp",
+            "Jamie Rivera joined Other Corp three years ago",
         )
 
     def test_husband_name_vs_husband_occupation_does_not_contradict(self):
-        # "User's husband is named Tom" vs "User's husband is a high school
+        # "User's husband is named Kim" vs "User's husband is a high school
         # history teacher" — different attributes.
         assert not self._check(
-            "The user's husband is named Tom",
+            "The user's husband is named Kim",
             "The user's husband is a high school history teacher",
         )
 
@@ -339,11 +339,11 @@ class TestPredicateContradiction:
         assert self._check("User is married", "User is divorced")
 
     def test_pet_name_change_contradicts(self):
-        # Both old garbage facts ("pet named Ethan" and "pet named Tom")
+        # Both old garbage facts ("pet named Alex" and "pet named Kim")
         # should chain so the older one supersedes.
         assert self._check(
-            "User has a pet named Ethan",
-            "User has a pet named Tom",
+            "User has a pet named Alex",
+            "User has a pet named Kim",
         )
 
     def test_role_change_contradicts(self):
@@ -369,8 +369,8 @@ class TestPredicateContradiction:
 class TestOwnerNameCanonicalization:
     """_strip_user_prefix only handled 'user'/'user's'/'the user' variants,
     so every S2-written fact — which uses the profile owner's name
-    ('Albert Green's ...') — bypassed predicate matching. Result: the
-    5-day Albert smoke stored contradictions as 'current' side by side
+    ('Jamie Rivera's ...') — bypassed predicate matching. Result: the
+    an early smoke run stored contradictions as 'current' side by side
     (mortgage fixed at 3.1% + mortgage higher than 3.1%, etc.).
 
     After the fix, _strip_user_prefix accepts an owner_names iterable
@@ -381,24 +381,24 @@ class TestOwnerNameCanonicalization:
     def test_strip_user_prefix_removes_owner_name(self):
         from sieve.writer import _strip_user_prefix
         out = _strip_user_prefix(
-            "Albert Green's mortgage rate is higher than 3.1%",
-            owner_names=["Albert Green"],
+            "Jamie Rivera's mortgage rate is higher than 3.1%",
+            owner_names=["Jamie Rivera"],
         )
         assert out == "mortgage rate is higher than 3.1%"
 
     def test_strip_user_prefix_removes_owner_name_without_possessive(self):
         from sieve.writer import _strip_user_prefix
         out = _strip_user_prefix(
-            "Albert Green lives in Bristol.",
-            owner_names=["Albert Green"],
+            "Jamie Rivera lives in Bristol.",
+            owner_names=["Jamie Rivera"],
         )
         assert out == "lives in bristol"
 
     def test_strip_user_prefix_handles_case_and_trailing_punctuation(self):
         from sieve.writer import _strip_user_prefix
         out = _strip_user_prefix(
-            "ALBERT GREEN's role is VP of Engineering.",
-            owner_names=["Albert Green"],
+            "JAMIE RIVERA's role is VP of Engineering.",
+            owner_names=["Jamie Rivera"],
         )
         assert out == "role is vp of engineering"
 
@@ -406,45 +406,45 @@ class TestOwnerNameCanonicalization:
         """Regression: existing callers that don't pass owner_names
         must keep the old behaviour — only user/user's variants stripped."""
         from sieve.writer import _strip_user_prefix
-        out = _strip_user_prefix("Albert Green lives in Bristol")
+        out = _strip_user_prefix("Jamie Rivera lives in Bristol")
         # Without owner_names, owner prefix is not recognised
-        assert out == "albert green lives in bristol"
+        assert out == "jamie rivera lives in bristol"
 
     def test_strip_user_prefix_strips_first_name_alias(self):
         """Writer passes the full owner plus first-name aliases so both
-        'Albert Green's X' and 'Albert's X' canonicalise."""
+        'Jamie Rivera's X' and 'Jamie's X' canonicalise."""
         from sieve.writer import _strip_user_prefix
         out = _strip_user_prefix(
-            "Albert's father is Colin.",
-            owner_names=["Albert Green", "Albert"],
+            "Jamie's father is Colin.",
+            owner_names=["Jamie Rivera", "Jamie"],
         )
         assert out == "father is colin"
 
     def test_content_equivalent_across_user_and_owner_form(self):
-        """'User lives in Bristol' and 'Albert Green lives in Bristol'
+        """'User lives in Bristol' and 'Jamie Rivera lives in Bristol'
         must be treated as the same fact for boost/dedup purposes."""
         from sieve.writer import _content_equivalent
         assert _content_equivalent(
             "user lives in bristol",
-            "albert green lives in bristol",
-            owner_names=["Albert Green"],
+            "jamie rivera lives in bristol",
+            owner_names=["Jamie Rivera"],
         )
 
     def test_mortgage_rate_contradiction_on_owner_form(self):
-        """The headline bug from the 5-day Albert baseline."""
+        """The headline bug from an early baseline run."""
         from sieve.writer import _is_direct_contradiction
         assert _is_direct_contradiction(
-            "albert green's mortgage rate is fixed at 3.1% until november",
-            "albert green's mortgage rate is currently higher than 3.1%",
-            owner_names=["Albert Green"],
+            "jamie rivera's mortgage rate is fixed at 3.1% until november",
+            "jamie rivera's mortgage rate is currently higher than 3.1%",
+            owner_names=["Jamie Rivera"],
         )
 
     def test_role_change_contradicts_on_owner_form(self):
         from sieve.writer import _is_direct_contradiction
         assert _is_direct_contradiction(
-            "albert green's role is vp of engineering",
-            "albert green's role is senior pm",
-            owner_names=["Albert Green"],
+            "jamie rivera's role is vp of engineering",
+            "jamie rivera's role is senior pm",
+            owner_names=["Jamie Rivera"],
         )
 
     def test_residence_contradicts_across_user_and_owner_form(self):
@@ -452,35 +452,34 @@ class TestOwnerNameCanonicalization:
         from sieve.writer import _is_direct_contradiction
         assert _is_direct_contradiction(
             "user lives in bristol",
-            "albert green lives in sydney",
-            owner_names=["Albert Green"],
+            "jamie rivera lives in sydney",
+            owner_names=["Jamie Rivera"],
         )
 
 
 class TestExtendedValuePredicates:
-    """Predicates added to cover the Albert persona — same-value-predicate
+    """Predicates added to cover the full test persona — same-value-predicate
     different-object shapes that _VALUE_PREDICATES did not catch.
     """
 
-    def _check(self, a: str, b: str, owner_names=("Albert Green",)) -> bool:
+    def _check(self, a: str, b: str, owner_names=("Jamie Rivera",)) -> bool:
         from sieve.writer import _is_direct_contradiction
         return _is_direct_contradiction(a.lower(), b.lower(), owner_names=owner_names)
 
     def test_mortgage_rate_numeric_change_contradicts(self):
         assert self._check(
-            "Albert Green's mortgage rate is 3.1%",
-            "Albert Green's mortgage rate is 4.2%",
+            "Jamie Rivera's mortgage rate is 3.1%",
+            "Jamie Rivera's mortgage rate is 4.2%",
         )
 
     def test_relation_name_change_contradicts(self):
-        """'My son is Oscar' then 'My son is Jake' — same relation slot,
-        different names. (Real Albert data had both Oscar and Jake as sons;
-        whether they're both valid is persona-level semantics, but the
-        writer's view of 'User's son is X' must treat them as candidate
-        contradictions for dedup/nuanced-view routing.)"""
+        """'My son is Oscar' then 'My son is Pat' — same relation slot,
+        different names. The writer's view of 'User's son is X' must
+        treat them as candidate contradictions for dedup/nuanced-view
+        routing."""
         assert self._check(
             "User's son is Oscar",
-            "User's son is Jake",
+            "User's son is Pat",
             owner_names=[],
         )
 
@@ -494,8 +493,8 @@ class TestExtendedValuePredicates:
     def test_role_plain_is_form_contradicts(self):
         """Without an 'at ...' suffix, 'role is X' should still match."""
         assert self._check(
-            "Albert Green's role is VP of Engineering",
-            "Albert Green's role is Director of Platform",
+            "Jamie Rivera's role is VP of Engineering",
+            "Jamie Rivera's role is Director of Platform",
         )
 
 
@@ -669,8 +668,8 @@ class TestStoreConflictMethods:
 
 def test_s2_prompt_template_renders_owner_name():
     from sieve.writer import _render_s2_prompt
-    out = _render_s2_prompt("Mary Chen")
-    assert "PROFILE OWNER: Mary Chen" in out
+    out = _render_s2_prompt("Jamie Rivera")
+    assert "PROFILE OWNER: Jamie Rivera" in out
     assert "{owner_name}" not in out  # no leaked placeholders
     # Must preserve the existing rules
     assert 'fact_type "objective"' in out

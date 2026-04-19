@@ -58,8 +58,8 @@ _PERSONAL_QUESTION = re.compile(
     r"who (am I|do I|are my)|how (do I|am I|should I))\b",
     re.IGNORECASE,
 )
-# Cycle 19: possessive references to a person attribute. Catches queries
-# like "Tell me about Mary's daughter" or "What is John's salary?" — the
+# Possessive references to a person attribute. Catches queries like
+# "Tell me about Jamie's daughter" or "What is John's salary?" — the
 # classifier previously missed these because they hit GENERIC_FACTUAL.
 _POSSESSIVE_PERSON_ATTR = re.compile(
     r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:'s|\u2019s)\s+"
@@ -218,7 +218,7 @@ class QueryClassifier:
         has_prior_context = bool(_PRIOR_CONTEXT.search(query))
         has_temporal_personal = bool(_TEMPORAL_PERSONAL.search(query))
         has_personal_question = bool(_PERSONAL_QUESTION.search(query))
-        # Cycle 19: possessive person references ("Mary's daughter", "his salary")
+        # Possessive person references ("Jamie's daughter", "his salary")
         has_possessive_person = bool(
             _POSSESSIVE_PERSON_ATTR.search(query)
             or _THIRD_PERSON_POSSESSIVE.search(query)
@@ -245,7 +245,7 @@ class QueryClassifier:
         # ── Decision logic ───────────────────────────────────────────────────
 
         # Strong positive: personal pronoun, explicit personal question,
-        # or possessive reference to a person attribute (cycle 19).
+        # or possessive reference to a person attribute.
         if (has_personal_pronoun or has_personal_question or has_temporal_personal
                 or has_possessive_person):
             reason = "personal pronoun / personal question detected"

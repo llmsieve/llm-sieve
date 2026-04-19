@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS facts (
     last_retrieved_at TEXT,
     created_at TEXT NOT NULL,
     last_confirmed_at TEXT,
-    -- Cycle 27 schema v2 (populated only when ablation.schema_v2 is on).
+    -- Schema v2 fields (populated only when ablation.schema_v2 is on).
     -- NULL on legacy rows; slot_key index is partial and ignores NULLs.
     subject_entity_id TEXT,
     predicate TEXT,
@@ -99,16 +99,16 @@ CREATE TABLE IF NOT EXISTS relationships (
     confidence REAL DEFAULT 0.7,
     status TEXT DEFAULT 'current',
     created_at TEXT NOT NULL,
-    -- Cycle 27 schema v2
+    -- Schema v2 fields
     relationship_type TEXT,
     valid_from TEXT,
     valid_to TEXT
 );
 
 CREATE TABLE IF NOT EXISTS known_unknowns (
-    -- Cycle 27: explicit absence signals. When retrieval looks up a slot
-    -- and finds nothing, or the profile_owner config declares a gap, a
-    -- row lands here so the context formatter can emit [NOT PRESENT: X].
+    -- Explicit absence signals. When retrieval looks up a slot and
+    -- finds nothing, or the profile_owner config declares a gap, a row
+    -- lands here so the context formatter can emit [NOT PRESENT: X].
     id TEXT PRIMARY KEY,
     subject_entity_id TEXT NOT NULL,
     slot_key TEXT NOT NULL,
@@ -194,9 +194,9 @@ CREATE INDEX IF NOT EXISTS idx_tool_registry_active ON tool_registry(active);
 CREATE INDEX IF NOT EXISTS idx_known_unknowns_subject ON known_unknowns(subject_entity_id);
 """
 
-# Cycle 27 v2 indexes run AFTER the ALTER TABLE migration in init_schema,
-# because on legacy DBs the referenced columns don't exist until the
-# ALTERs complete.
+# Schema v2 indexes run AFTER the ALTER TABLE migration in
+# init_schema, because on legacy DBs the referenced columns don't
+# exist until the ALTERs complete.
 _V2_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_facts_slot_current
     ON facts(slot_key)
@@ -206,9 +206,10 @@ CREATE INDEX IF NOT EXISTS idx_facts_slot_current
 CREATE INDEX IF NOT EXISTS idx_facts_valid_from ON facts(valid_from);
 """
 
-# Cycle 27 schema v2: ALTER TABLE columns for existing DBs that were
-# created before v2 landed. Each entry is (table, column, type). Applied
-# idempotently in init_schema() — errors "duplicate column" are swallowed.
+# Schema v2: ALTER TABLE columns for existing DBs that were created
+# before v2 landed. Each entry is (table, column, type). Applied
+# idempotently in init_schema() — errors "duplicate column" are
+# swallowed.
 _V2_ALTERS: list[tuple[str, str, str]] = [
     ("facts", "subject_entity_id", "TEXT"),
     ("facts", "predicate", "TEXT"),
@@ -315,10 +316,10 @@ class MemoryStore:
     def init_schema(self) -> None:
         """Create all tables, indexes, and the vector virtual table.
 
-        Also runs cycle27 v2 ALTER TABLE migrations idempotently — existing
-        DBs created before v2 get the new columns; fresh DBs already have
-        them from SCHEMA_SQL and the ALTERs no-op (duplicate-column errors
-        are swallowed).
+        Also runs schema v2 ALTER TABLE migrations idempotently —
+        existing DBs created before v2 get the new columns; fresh DBs
+        already have them from SCHEMA_SQL and the ALTERs no-op
+        (duplicate-column errors are swallowed).
         """
         self.conn.executescript(SCHEMA_SQL)
 
@@ -405,7 +406,7 @@ class MemoryStore:
         confidence: float = 0.7,
         fact_type: str = "objective",
         session_coherence_score: float | None = None,
-        # ── Cycle 27 schema v2 fields (all optional, NULL on legacy inserts) ──
+        # ── Schema v2 fields (all optional, NULL on legacy inserts) ──
         subject_entity_id: str | None = None,
         predicate: str | None = None,
         object_entity_id: str | None = None,
@@ -419,7 +420,7 @@ class MemoryStore:
     ) -> str:
         """Insert a fact and its embedding vector. Returns the fact ID.
 
-        Cycle 27 schema_v2 fields are optional; when NULL the row is
+        Schema v2 fields are optional; when NULL the row is
         indistinguishable from a legacy row and is not served by the
         slot_lookup / timeline retrieval paths.
         """
@@ -871,7 +872,7 @@ class MemoryStore:
 
         return result
 
-    # --- Cycle 27: known_unknowns CRUD ---
+    # --- known_unknowns CRUD ---
 
     def insert_known_unknown(
         self,

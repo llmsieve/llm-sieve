@@ -157,7 +157,7 @@ class TestRelationshipPatterns:
         assert "Madeline" in rel[0].entity_names
 
     def test_friend(self):
-        facts = extract_facts_s1("My best friend is Tom.")
+        facts = extract_facts_s1("My best friend is Kim.")
         rel = [f for f in facts if f.category == "relationship"]
         assert rel
 
@@ -165,7 +165,7 @@ class TestRelationshipPatterns:
 class TestRelationshipCaptureBoundaries:
     """S1 regex used re.IGNORECASE, which neutralised the [A-Z] name
     anchors and let lowercase function words bleed into captures.
-    The Albert Green validation store surfaced facts like
+    Validation store runs surfaced facts like
     'User's daughter is from', 'User's son is Oscar has',
     'User's dad is Colin was' — these must not be extracted.
     """

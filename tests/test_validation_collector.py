@@ -3,7 +3,7 @@
 The collector reads MemoryStore.stats() keys that are suffixed with "_count"
 (facts_count, entities_count, relationships_count, known_unknowns_count).
 A prior version of the code read the un-suffixed names and silently wrote
-zeros into validation_metrics.db — the Albert Green 30-day run was entirely
+zeros into validation_metrics.db — a 30-day validation run was entirely
 reported as facts_in_store=0 because of it.
 """
 
@@ -18,9 +18,9 @@ def _seed_minimal_store(path: str) -> MemoryStore:
     store = MemoryStore(StoreConfig(path=path))
     store.open()
     store.init_schema()
-    entity_id = store.insert_entity("Albert Green", type="person")
+    entity_id = store.insert_entity("Jamie Rivera", type="person")
     store.insert_fact(
-        "User is Albert Green",
+        "User is Jamie Rivera",
         entity_ids=[entity_id],
         source="writer_s1",
         confidence=0.75,

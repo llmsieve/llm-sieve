@@ -1,4 +1,4 @@
-"""Unit tests for src.fact_classifier_v2 (Cycle 28 Tier 2 classifier)."""
+"""Unit tests for src.fact_classifier_v2 (Tier 2 classifier)."""
 from __future__ import annotations
 
 import asyncio
@@ -27,14 +27,14 @@ def _ok_payload(subject: str, predicate: str, obj: str, category: str) -> dict:
 async def test_classify_fact_happy_path(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         url="http://127.0.0.1:11434/api/generate",
-        json=_ok_payload("Mary Chen", "employer", "Meridian Health", "work"),
+        json=_ok_payload("Jamie Rivera", "employer", "Example Corp", "work"),
     )
-    result = await classify_fact_async("Mary Chen works at Meridian Health")
-    assert result.subject == "Mary Chen"
+    result = await classify_fact_async("Jamie Rivera works at Example Corp")
+    assert result.subject == "Jamie Rivera"
     assert result.predicate == "employer"
-    assert result.object_literal == "Meridian Health"
+    assert result.object_literal == "Example Corp"
     assert result.category == "work"
-    assert result.slot_key == "mary_chen:employer"
+    assert result.slot_key == "jamie_rivera:employer"
     assert result.is_populated
     assert result.extraction_method == "tier2_gemma4_e4b"
 
@@ -69,14 +69,14 @@ async def test_classify_fact_rejects_out_of_set_values(
     httpx_mock.add_response(
         url="http://127.0.0.1:11434/api/generate",
         json={"response": json.dumps({
-            "subject": "Mary",
+            "subject": "Jamie",
             "predicate": "attended_school",  # not in PREDICATES
             "object": "MIT",
             "category": "invalid_cat",       # not in CATEGORIES
         })},
     )
-    result = await classify_fact_async("Mary attended MIT")
-    assert result.subject == "Mary"
+    result = await classify_fact_async("Jamie attended MIT")
+    assert result.subject == "Jamie"
     # Out-of-set values must be wiped so we don't corrupt slot indexing.
     assert result.predicate is None
     assert result.category is None
@@ -85,12 +85,12 @@ async def test_classify_fact_rejects_out_of_set_values(
 
 
 def test_slot_key_for_handles_pronouns_and_punctuation() -> None:
-    assert _slot_key_for("Mary Chen", "employer") == "mary_chen:employer"
-    # Possessive "'s" is stripped so "Mary Chen's" and "Mary Chen" collapse
+    assert _slot_key_for("Jamie Rivera", "employer") == "jamie_rivera:employer"
+    # Possessive "'s" is stripped so "Jamie Rivera's" and "Jamie Rivera" collapse
     # onto the same slot_key — this is deliberate for entity disambiguation.
-    assert _slot_key_for("Mary Chen's", "residence") == "mary_chen:residence"
+    assert _slot_key_for("Jamie Rivera's", "residence") == "jamie_rivera:residence"
     assert _slot_key_for(None, "employer") is None
-    assert _slot_key_for("Mary Chen", None) is None
+    assert _slot_key_for("Jamie Rivera", None) is None
     assert _slot_key_for("", "employer") is None
 
 
@@ -112,9 +112,9 @@ def test_closed_sets_match_query_classifier() -> None:
 async def test_sync_wrapper_runs(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         url="http://127.0.0.1:11434/api/generate",
-        json=_ok_payload("Tom", "residence", "Waltham", "housing"),
+        json=_ok_payload("Kim", "residence", "Waltham", "housing"),
     )
     # Just verify the async function returns an awaitable that resolves.
-    result = await classify_fact_async("Tom moved to Waltham")
+    result = await classify_fact_async("Kim moved to Waltham")
     assert result.predicate == "residence"
-    assert result.slot_key == "tom:residence"
+    assert result.slot_key == "kim:residence"

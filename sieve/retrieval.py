@@ -26,11 +26,11 @@ from sieve.store import deserialize_float32
 
 logger = logging.getLogger("recall.retrieval")
 
-# ── Cycle 18: context_format auto dispatch ───────────────────────────────────
+# ── context_format auto dispatch ────────────────────────────────────────────
 # Queries asking about evolution / progression / history benefit from the
 # structured (timeline-grouped) format. Single-fact lookups regress under
-# structured because of elaboration noise — the cycle 12 finding. The auto
-# mode dispatches based on a small keyword set in the query text.
+# structured because of elaboration noise. The auto mode dispatches based
+# on a small keyword set in the query text.
 _TEMPORAL_QUERY_PATTERN = re.compile(
     r"\b(over time|over the years|progression|progress|"
     r"has changed|have changed|how (?:has|have).+changed|"
@@ -39,7 +39,7 @@ _TEMPORAL_QUERY_PATTERN = re.compile(
     r"journey|across the story|throughout the story|over the story|"
     r"walk (?:me|us) through|describe (?:.+ )?(?:life|career|history|journey)|"
     # Require "tell me about" to be paired with a temporal noun, not bare —
-    # bare "tell me about X" is a single-fact query (cycle 18 D2 fix).
+    # bare "tell me about X" is a single-fact query.
     r"tell (?:me|us) about (?:.+ )?(?:life|story|career|history|journey|past)|"
     r"used to|previously|"
     r"first.+then|started.+now|"
@@ -51,7 +51,7 @@ _TEMPORAL_QUERY_PATTERN = re.compile(
 
 
 def _pick_format(query: str) -> str:
-    """Cycle 18: dispatch context format based on query type.
+    """Dispatch context format based on query type.
 
     Returns "structured" for queries about progression / change / history,
     otherwise "flat". Used when ContextRetriever is initialised with
@@ -69,19 +69,19 @@ _MAX_FACTS = 15
 # Rough token budget for the context block (injected as system message)
 _CONTEXT_TOKEN_BUDGET = 150
 
-# Cycle 9 — retrieval dedup + MMR diversity re-ranking
+# Retrieval dedup + MMR diversity re-ranking
 _CANDIDATE_MULTIPLIER = 2          # fetch 2× top_k candidates before dedup
 _DEDUP_SIMILARITY = 0.9            # cosine similarity threshold for content dedup
-_TEMPORAL_DEDUP_SIMILARITY = 0.85  # Cycle 26 Fix 2 — separate from content dedup
-# Cycle 26 Fix 3a: the legacy format cap (_CONTEXT_TOKEN_BUDGET=150) was
-# aspirational — the old format functions did not actually truncate. Setting
-# the new max_tokens default to the tier-0 budget from the adaptive budget
-# table preserves pre-Cycle-26 behavior for callers that don't pass a budget
+_TEMPORAL_DEDUP_SIMILARITY = 0.85  # separate from content dedup
+# The legacy format cap (_CONTEXT_TOKEN_BUDGET=150) was aspirational — the
+# old format functions did not actually truncate. Setting the new
+# max_tokens default to the tier-0 budget from the adaptive budget table
+# preserves legacy behavior for callers that don't pass a budget
 # explicitly (e.g., recall_tool.py inner loop, tests, future callers).
 _LEGACY_DEFAULT_FORMAT_TOKENS = 1300
 _GRAPH_RESERVE = 3                 # slots always reserved for graph-hop facts
 _MMR_LAMBDA = 0.7                  # 0.7 relevance / 0.3 diversity
-_MMR_ENABLED = True                # kill-switch: False → behave like Cycle 8
+_MMR_ENABLED = True                # kill-switch: False → behave like the no-MMR baseline
 
 
 @dataclass
@@ -124,9 +124,9 @@ class ContextRetriever:
             context_format if context_format in ("flat", "structured", "auto") else "auto"
         )
         self._temporal_dedup_enabled = temporal_dedup_enabled
-        # Cycle 30 Fix 5: optional RerankerService applied to primary
-        # candidates after vector search. No-op if None or if the service
-        # reports unavailable.
+        # Optional RerankerService applied to primary candidates after
+        # vector search. No-op if None or if the service reports
+        # unavailable.
         self._reranker = reranker
 
     async def retrieve(
@@ -165,7 +165,7 @@ class ContextRetriever:
         if not vector_facts:
             vector_facts = self._fallback_recent_facts(candidate_limit)
 
-        # ── 1b. Cross-encoder re-rank (Cycle 30 Fix 5) ────────────────────
+        # ── 1b. Cross-encoder re-rank ────────────────────────────────────
         # Run the cross-encoder over the widened candidate pool to re-order
         # by genuine query-fact relevance before dedup and graph-hop
         # merging. No-op if the reranker is unavailable or absent.
@@ -293,7 +293,7 @@ class ContextRetriever:
             all_facts.sort(key=_score)
             all_facts = all_facts[:final_cap]
 
-        # ── 5b. Cycle 26 Fix 2: post-retrieval temporal dedup ───────────────
+        # ── 5b. Post-retrieval temporal dedup ───────────────────────────────
         dedup_dropped = 0
         if self._temporal_dedup_enabled and len(all_facts) > 1:
             # Ensure every fact in the final set has a content embedding loaded.
@@ -309,7 +309,7 @@ class ContextRetriever:
             dedup_dropped = before_count - len(all_facts)
 
         # ── 6. Assemble context block ─────────────────────────────────────
-        # Cycle 18: when mode is "auto", dispatch per-query.
+        # When mode is "auto", dispatch per-query.
         if self._context_format == "auto":
             chosen_format = _pick_format(query)
         else:
@@ -366,7 +366,7 @@ class ContextRetriever:
         final_top_k: int = 10,
         include_episodes: bool = False,
     ) -> RetrievedContext:
-        """Cycle 30 Fix 3: merge-retrieve across multiple sub-queries.
+        """Merge-retrieve across multiple sub-queries.
 
         Runs the normal retrieval pipeline once per sub-query at a small
         per_query_top_k, merges the fact lists (dedup by fact id,
@@ -576,7 +576,7 @@ def _format_episode_footer(episodes: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# ─── Cycle 12 — structured context formatter ──────────────────────────────
+# ─── Structured context formatter ──────────────────────────────────────────
 
 _CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("Family", ("wife", "husband", "partner", "spouse", "married", "separated",
@@ -713,7 +713,7 @@ def _format_context_block_structured(
     return "\n".join(lines)
 
 
-# ─── Cycle 9 helpers — dedup + MMR diversity re-ranking ────────────────────
+# ─── Dedup + MMR diversity re-ranking helpers ──────────────────────────────
 
 def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity. Returns 0.0 on empty, zero-magnitude, or length mismatch."""
@@ -869,7 +869,7 @@ def _mmr_rerank(
     return selected
 
 
-# ── Cycle 26 Fix 2: post-retrieval temporal dedup ─────────────────────────────
+# ── Post-retrieval temporal dedup ─────────────────────────────────────────────
 def _temporal_dedup(
     facts: list[dict],
     content_embs: dict[str, list[float]],
@@ -884,9 +884,9 @@ def _temporal_dedup(
       1. they share at least one entity_id
       2. cosine similarity of their content embeddings >= threshold
 
-    Either alone is wrong: similarity alone would collapse "Mary in Boston"
-    with "Tom in Boston" (different subjects); entity overlap alone would
-    collapse "Mary's condo in Beacon Hill" with "Mary's cabin in Vermont"
+    Either alone is wrong: similarity alone would collapse "Jamie in Boston"
+    with "Kim in Boston" (different subjects); entity overlap alone would
+    collapse "Jamie's condo in Beacon Hill" with "Jamie's cabin in Vermont"
     (different places). The AND gate targets exactly "two facts about the
     same entity saying near-the-same thing at different times."
 

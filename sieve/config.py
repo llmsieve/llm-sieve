@@ -67,7 +67,7 @@ class PipelineConfig:
     core_facts_size: int = 30
     max_outbound_tokens: int = 8000  # hard cap on composed lean payload
     think_enabled: bool = False      # reserved for user-controllable <#think_on#>/<#think_off#> tags; pipeline does not inject a `think` flag (see pipeline.py)
-    context_format: str = "auto"  # "flat" | "structured" | "auto" (Cycle 18 — auto dispatches structured for temporal queries, flat otherwise)
+    context_format: str = "auto"  # "flat" | "structured" | "auto" (auto dispatches structured for temporal queries, flat otherwise)
     # Facts surfaced into the lean payload BEFORE any tool call. Smaller
     # here keeps the outbound prompt tight (~230→~75 tokens of facts);
     # when the model needs more it can still invoke the recall tool to
@@ -86,23 +86,21 @@ class WriterConfig:
     model: str = "auto"
     fallback_model: str = "auto"
     num_ctx: int = 4096
-    ghost_validator_enabled: bool = True  # Cycle 26 Fix 1 kill-switch
+    ghost_validator_enabled: bool = True
 
 
 @dataclass
 class RetrievalConfig:
-    """Retrieval pipeline tunables. Cycle 26 adds temporal_dedup_enabled
-    (Fix 2). Cycle 30 Fix 5 adds reranker_enabled, Fix 3 adds
-    query_decomposition_enabled."""
+    """Retrieval pipeline tunables."""
     temporal_dedup_enabled: bool = True
-    # Cycle 30 Fix 5: cross-encoder re-ranking over vector search
-    # candidates. Runs CPU-side in-process, ~20-50ms per query. Ships ON
-    # to tighten retrieval precision during the Days 6-15 middle zone.
+    # Cross-encoder re-ranking over vector search candidates. Runs
+    # CPU-side in-process, ~20-50ms per query. Ships ON to tighten
+    # retrieval precision on mid-run queries.
     reranker_enabled: bool = True
-    # Cycle 30 Fix 3: decompose complexity=2 queries into 2-4 sub-queries
-    # before vector search. Adds one LLM call per multi-hop query
-    # (~100-500ms) plus a handful of extra vector searches. Ships ON to
-    # lift M-category accuracy (0.55 vs baseline 0.91).
+    # Decompose complexity=2 queries into 2-4 sub-queries before vector
+    # search. Adds one LLM call per multi-hop query (~100-500ms) plus a
+    # handful of extra vector searches. Ships ON to lift multi-hop
+    # accuracy.
     query_decomposition_enabled: bool = True
 
 
@@ -139,7 +137,7 @@ class AblationConfig:
     coherence_integrity: bool = True
     stage2_writer: bool = True
     recall_tool: bool = True
-    # Cycle 19: Response Verification Layer.
+    # Response Verification Layer.
     # Pass-2 ablation showed AS-only is the only net-positive combination at
     # MEDIUM/qwen3.5:9b: +0.25 aggregate accuracy, -0.02 hallucination, with
     # +0.54 acc / -0.26 hallu on D_trap specifically. CW (closed-world framing)
@@ -147,29 +145,29 @@ class AblationConfig:
     # interacts badly with AS and never fired in pass 2 anyway. Default both
     # to OFF; keep AS on.
     absence_signal: bool = True            # ABL-AS — Layer 1 (shipping)
-    closed_world: bool = False             # ABL-CW — Layer 2 (regressed; see cycle19)
+    closed_world: bool = False             # ABL-CW — Layer 2 (regressed)
     response_verification: bool = False    # ABL-RV — Layer 3 (no measurable benefit)
-    # Cycle 27: schema v2 — slot-based writes, supersession, SlotRetriever,
-    # context format v2, known_unknowns. Default OFF; gated behind this flag
-    # until T13 evaluation. When False, writer/retrieval/format paths are
-    # unchanged from cycle26.
-    schema_v2: bool = False                # ABL-SV2 — cycle27 schema redesign
-    # Cycle 28: two-tier writer + three-tier retrieval + EXTREME summary.
+    # schema v2 — slot-based writes, supersession, SlotRetriever,
+    # context format v2, known_unknowns. Default OFF; gated behind this
+    # flag. When False, writer/retrieval/format paths are unchanged from
+    # the legacy schema.
+    schema_v2: bool = False                # ABL-SV2 — schema redesign
+    # Two-tier writer + three-tier retrieval + EXTREME summary.
     # tier2_classifier — gemma4:e4b classifies free-text facts into
     # structured tags (writer) and routes queries to predicates (retrieval)
     # when the rule-based Tier 1 keyword classifier returns generic.
     # extreme_summary — when inbound payload > 25K tokens, compress the
     # stripped bloat into a ~500-token narrative and include as
     # [NARRATIVE SUMMARY] in the context block.
-    tier2_classifier: bool = False         # ABL-T2C — cycle28 LLM classifier (Phase 4 FAIL: off)
-    extreme_summary: bool = True           # ABL-XS — cycle28 EXTREME summary (Phase 4 partial PASS: ships on)
+    tier2_classifier: bool = False         # ABL-T2C — LLM classifier (off by default)
+    extreme_summary: bool = True           # ABL-XS — EXTREME summary (ships on)
 
 
 @dataclass
 class ProfileOwnerConfig:
     """Who the user is. Pinned into the writer S2 prompt and used by the
     ghost-fact validator to reject inverted-identity extractions."""
-    name: str = ""                    # canonical full name, e.g. "Mary Chen"
+    name: str = ""                    # canonical full name, e.g. "Jamie Rivera"
     aliases: list[str] = field(default_factory=list)  # first-person + nicknames
     # Optional one-sentence identity statement. When set, bootstrapped
     # into the store on first open (as the User entity + a seed fact)

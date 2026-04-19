@@ -30,10 +30,10 @@ Answer directly and concisely. Do not repeat the question. \
 Do not add unnecessary preamble or disclaimers. \
 Keep responses under 200 words unless the question requires detailed explanation."""
 
-# Cycle 30 Fix 1: when the classifier confidently tags a query as pure
-# general knowledge (Level 0, high confidence), swap the memory-focused
-# framing above for a neutral "helpful, knowledgeable assistant" framing.
-# The memory framing biases the model toward hedging or refusing on
+# When the classifier confidently tags a query as pure general
+# knowledge (Level 0, high confidence), swap the memory-focused framing
+# above for a neutral "helpful, knowledgeable assistant" framing. The
+# memory framing biases the model toward hedging or refusing on
 # general-knowledge queries; a clean framing closes the G-category gap.
 GENERAL_LEAN_SYSTEM_PROMPT = """\
 You are a helpful, knowledgeable assistant.
@@ -67,7 +67,7 @@ def _extract_owner_pin(system_text: str) -> str:
     """Find the one-sentence identity pin in the agent's system prompt.
 
     Returns the first matching sentence (e.g. "The person speaking is
-    Albert Green, a 41-year-old..."). Empty string when nothing matches.
+    Jamie Rivera, a 41-year-old..."). Empty string when nothing matches.
     Used by compose_lean_payload to preserve identity grounding across
     the lean-prompt substitution.
     """
