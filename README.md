@@ -49,8 +49,8 @@ Full methodology and detailed analysis will be published in a forthcoming paper.
 
 ```bash
 pip install llm-sieve
-sieve init       # interactive setup; downloads embedding model, writes ~/.sieve/sieve.yaml
-sieve start      # proxy listens on http://127.0.0.1:11435
+sieve init        # zero-prompt setup; add --wizard to be asked about each option
+sieve start       # proxy listens on http://127.0.0.1:11435
 ```
 
 Point your agent at `http://127.0.0.1:11435` instead of your usual LLM endpoint. That is the whole integration.
@@ -78,6 +78,23 @@ sieve demo
 ```
 
 It runs a six-message scripted conversation — a new identity introduces themselves, shares a couple of facts, asks Sieve to recall them, and then asks about a person who was never mentioned. You will see recall hits on the seeded facts, and a refusal on the absence-trap question.
+
+## Managing Sieve
+
+The CLI covers everyday operations without editing YAML:
+
+```bash
+sieve status                           # running state + store counts
+sieve config show                      # current config (non-defaults highlighted)
+sieve config set listen.port 11500     # validated + type-coerced
+sieve store facts --limit 10          # inspect what Sieve has learned
+sieve store stats                      # per-table row counts
+sieve backup create                    # encrypted snapshot with checksum
+sieve key rotate                       # re-encrypt the store with a new key
+sieve uninstall --hard                 # remove everything (requires typing DELETE)
+```
+
+Full list with every flag: [CLI reference](https://llmsieve.dev/cli-reference/).
 
 ## Configuration
 
