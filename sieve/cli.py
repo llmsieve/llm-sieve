@@ -1796,23 +1796,47 @@ def benchmark(
                             border_style="cyan",
                         )
                     )
-                    go = click.confirm(
-                        "Proceed with [1] Run it?",
-                        default=True,  # Y by default — this is the common case.
+                    pick = _prompt_numbered(
+                        "Choose [1 / 2 / 3]",
+                        valid=("1", "2", "3"),
+                        default="1",
                     )
-                    if not go:
+                    if pick == "2":
+                        # Abort — the Modelfile recipe is already on
+                        # screen above. The user copies, adjusts, and
+                        # re-runs the benchmark with the new model name.
                         console.print(
-                            "[yellow]Cancelled. Pick option [2] to raise "
-                            "num_ctx, or re-run with [cyan]--fixture "
-                            f"{smaller_fixture}[/][yellow] for option [3]."
-                            "[/]"
+                            "[yellow]Cancelled. Run the three commands "
+                            "above to raise num_ctx, then re-run the "
+                            "benchmark with the new model name.[/]"
                         )
                         sys.exit(0)
-                    cwin_precise_text = (
-                        f"effective num_ctx={effective_ctx:,} < fixture peak "
-                        f"~{fixture_peak:,}; baseline expected to fail, "
-                        "Sieve expected to succeed."
-                    )
+                    if pick == "3":
+                        # Swap the fixture and carry on. We record the
+                        # change in the methodology-limitations section.
+                        console.print(
+                            f"[dim]Dropping to fixture "
+                            f"'[cyan]{smaller_fixture}[/]' for a "
+                            f"same-context comparison.[/]"
+                        )
+                        cwin_precise_text = (
+                            f"User chose [3]: dropped from '{fixture}' to "
+                            f"'{smaller_fixture}' because effective "
+                            f"num_ctx={effective_ctx:,} < peak "
+                            f"~{fixture_peak:,}."
+                        )
+                        fixture = smaller_fixture
+                        # Recompute peak for subsequent reporting —
+                        # not strictly needed (we've already passed
+                        # the check) but keeps local state coherent.
+                        fixture_peak = int(fixture_approx_tokens(fixture) * 1.8)
+                    else:
+                        # [1] — the common path. Run it.
+                        cwin_precise_text = (
+                            f"effective num_ctx={effective_ctx:,} < fixture peak "
+                            f"~{fixture_peak:,}; baseline expected to fail, "
+                            "Sieve expected to succeed."
+                        )
             else:
                 # ── Tier 3: even Sieve won't fit ──────────────────
                 msg = (
@@ -1851,16 +1875,25 @@ def benchmark(
                 else:
                     console.print()
                     console.print(Panel_lite_warning(msg))
-                    go = click.confirm(
-                        "Continue anyway? Both passes are expected to fail.",
-                        default=False,  # N by default — rare/risky case.
+                    pick = _prompt_numbered(
+                        "Choose [1 / 2 / 3]",
+                        valid=("1", "2", "3"),
+                        default="2",  # tier 3 default: cancel
                     )
-                    if not go:
+                    if pick == "1":
                         console.print(
-                            "[yellow]Cancelled. Raise num_ctx or switch "
-                            "models, then re-run.[/]"
+                            "[yellow]Run the three commands above to raise "
+                            "num_ctx, then re-run the benchmark with the "
+                            "new model name.[/]"
                         )
                         sys.exit(0)
+                    if pick == "2":
+                        console.print(
+                            "[yellow]Cancelled. Pick a model with a larger "
+                            "effective context window, then re-run.[/]"
+                        )
+                        sys.exit(0)
+                    # [3] — continue anyway. Rare path.
                     cwin_precise_text = (
                         f"effective num_ctx={effective_ctx:,} below Sieve's "
                         f"typical outbound ~{_SIEVE_TYPICAL_OVERHEAD_TOKENS:,}; "
@@ -1999,6 +2032,35 @@ def Panel_lite_warning(text: str, *, title: str = "⚠  Context-window warning",
     """Inline Panel factory — imports lazily to avoid a global rich dep."""
     from rich.panel import Panel
     return Panel(text, title=title, border_style=border_style)
+
+
+def _prompt_numbered(
+    prompt: str,
+    *,
+    valid: tuple[str, ...],
+    default: str,
+) -> str:
+    """Prompt the user to pick one of a short set of numbered options.
+
+    Re-prompts on unrecognised input instead of erroring, so the user
+    never gets stuck. Empty input returns ``default``. Strips
+    whitespace and is case-insensitive.
+    """
+    while True:
+        raw = click.prompt(
+            prompt,
+            type=str,
+            default=default,
+            show_default=True,
+        )
+        pick = (raw or "").strip().lower()
+        if not pick:
+            return default
+        if pick in valid:
+            return pick
+        console.print(
+            f"[yellow]'{raw}' isn't one of {', '.join(valid)} — try again.[/]"
+        )
 
 
 class _WrapAdapter:
