@@ -1707,35 +1707,54 @@ def benchmark(
     cwin_precise_text: str | None = None
     from sieve._wizard_helpers import model_context_window
     from sieve._agent_fixture import fixture_approx_tokens
-    ctx_limit = model_context_window(direct_base, model_name)
-    if ctx_limit is not None:
+    ctx = model_context_window(direct_base, model_name)
+    if ctx is not None:
+        effective_ctx, architectural_ctx = ctx
         # Estimated peak: base (system prompt + tools) + ~1× growing
         # history by turn 15 on the growing-agent script. The ×1.8
         # multiplier matches what real fixtures produce in practice
         # (measured on medium, large, xlarge).
         fixture_peak = int(fixture_approx_tokens(fixture) * 1.8)
-        if fixture_peak > ctx_limit:
+        if fixture_peak > effective_ctx:
+            # Suggested Modelfile num_ctx: enough to cover the fixture
+            # peak with headroom, rounded up to the nearest power of 2,
+            # but never exceeding the model's architectural ceiling.
+            target = fixture_peak * 2
+            rounded = 1
+            while rounded < target:
+                rounded *= 2
+            suggested_ctx = min(rounded, architectural_ctx)
+            # Pick the next-smaller fixture for the "[b]" option.
+            from sieve._agent_fixture import fixture_names
+            order = fixture_names()
+            idx = order.index(fixture) if fixture in order else 1
+            smaller_fixture = order[max(0, idx - 1)] if idx > 0 else fixture
+            arch_note = (
+                f" (architectural max: {architectural_ctx:,})"
+                if architectural_ctx > effective_ctx else ""
+            )
             msg = (
-                f"Model '{model_name}' reports num_ctx={ctx_limit:,} but "
-                f"fixture '{fixture}' peaks at ~{fixture_peak:,} tokens/turn "
-                f"by turn {turns}.\n"
-                f"  Baseline will likely error or truncate on turn "
-                f"{max(1, ctx_limit // max(1, fixture_approx_tokens(fixture) // 2))} "
-                f"onwards.\n"
-                f"  Options:\n"
-                f"    [a] Continue anyway (baseline errors logged in report)\n"
-                f"    [b] Drop to a smaller fixture (e.g. --fixture "
-                f"{'small' if fixture != 'small' else fixture})\n"
-                f"    [c] Raise num_ctx with a Modelfile:\n"
-                f"         [dim]ollama show {model_name} --modelfile > Modelfile[/]\n"
-                f"         [dim]# add/replace: PARAMETER num_ctx {max(ctx_limit * 2, 32768)}[/]\n"
-                f"         [dim]ollama create {model_name}-ctx{max(ctx_limit * 2, 32768)} -f Modelfile[/]"
+                f"Model '{model_name}' is running with effective "
+                f"num_ctx={effective_ctx:,}{arch_note}, but fixture "
+                f"'{fixture}' ships ~{fixture_peak:,} tokens/turn at "
+                f"peak (turn {turns}).\n"
+                f"Baseline will error or truncate mid-run.\n\n"
+                f"Options:\n"
+                f"  [a] Continue anyway — baseline errors will be logged "
+                f"in the report\n"
+                f"  [b] Drop to a smaller fixture "
+                f"(e.g. --fixture {smaller_fixture})\n"
+                f"  [c] Raise num_ctx with a Modelfile:\n"
+                f"       ollama show {model_name} --modelfile > Modelfile\n"
+                f"       # add line: PARAMETER num_ctx {suggested_ctx}\n"
+                f"       ollama create {model_name}-ctx{suggested_ctx} -f Modelfile\n"
+                f"       then re-run with --model {model_name}-ctx{suggested_ctx}"
             )
             if no_input:
                 cwin_precise_text = (
-                    f"model num_ctx={ctx_limit:,} < fixture peak "
-                    f"~{fixture_peak:,}; --no-input so continued; errors "
-                    "likely in baseline pass."
+                    f"model effective num_ctx={effective_ctx:,} < fixture "
+                    f"peak ~{fixture_peak:,}; --no-input so continued; "
+                    "errors expected in baseline pass."
                 )
                 console.print()
                 console.print(Panel_lite_warning(msg))
@@ -1753,12 +1772,12 @@ def benchmark(
                 if not go:
                     console.print(
                         "[yellow]Cancelled. Re-run with a smaller --fixture "
-                        "or a model with a larger context window.[/]"
+                        "or a model with a larger effective context window.[/]"
                     )
                     sys.exit(0)
                 cwin_precise_text = (
-                    f"User continued with model num_ctx={ctx_limit:,} < fixture "
-                    f"peak ~{fixture_peak:,}; expect baseline errors."
+                    f"User continued with effective num_ctx={effective_ctx:,} "
+                    f"< fixture peak ~{fixture_peak:,}; expect baseline errors."
                 )
 
     # Merge the precise and heuristic warnings into one bullet so

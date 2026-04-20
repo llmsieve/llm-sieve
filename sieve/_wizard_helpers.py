@@ -24,29 +24,47 @@ from typing import Callable, Sequence
 import httpx
 
 
-def model_context_window(base_url: str, model: str, timeout: float = 4.0) -> int | None:
-    """Query Ollama's ``/api/show`` for the model's effective ``num_ctx``.
+# Ollama's runtime default when no Modelfile sets num_ctx. This is
+# what actually gets enforced at inference time — the architectural
+# max reported in model_info.*.context_length is what the model
+# *could* do if configured, not what the running server serves.
+# Source: Ollama docs + github.com/ollama/ollama `envconfig.go`
+# (OLLAMA_CONTEXT_LENGTH default). Has been 2048/4096 historically;
+# newer Ollama defaults to 4096.
+_OLLAMA_DEFAULT_NUM_CTX = 4096
 
-    Returns the integer num_ctx when we can determine it, otherwise
-    ``None``. Silent fall-through on non-Ollama endpoints (OpenAI /
-    LM Studio / etc. don't expose this; a 404 means "can't tell").
 
-    Ollama payload structure (v0.1.x through v0.4.x):
+def model_context_window(
+    base_url: str, model: str, timeout: float = 4.0
+) -> tuple[int, int] | None:
+    """Query Ollama's ``/api/show`` for the model's context window.
+
+    Returns ``(effective_ctx, architectural_ctx)`` on success, where:
+
+    - ``effective_ctx`` is what Ollama enforces at inference time:
+      the ``num_ctx`` from the Modelfile if set, otherwise Ollama's
+      runtime default (4096).
+    - ``architectural_ctx`` is what the model was *trained* for —
+      its upper bound if the operator raises num_ctx in a Modelfile.
+
+    Returns ``None`` on non-Ollama endpoints (OpenAI / LM Studio /
+    etc. don't expose this; a 404 means "can't tell").
+
+    The pair matters for our preflight: we flag overflow when the
+    fixture exceeds ``effective_ctx`` (the value that 500s the
+    request) AND tell the user the architectural ceiling so they
+    know what `PARAMETER num_ctx` number to put in a Modelfile.
+
+    Ollama payload structure (v0.1.x through v0.4.x)::
 
         {
-          "modelfile": "...",              # human-readable
-          "parameters": "num_ctx 8192\\n...",
+          "modelfile": "...",                          # human-readable
+          "parameters": "num_ctx 8192\\nstop ...",      # may or may not have num_ctx
           "model_info": {
-            "llama.context_length": 131072,  # the *architectural* max
+            "llama.context_length": 131072,            # architectural max
             ...
           }
         }
-
-    The user-effective context is ``parameters.num_ctx`` if set,
-    otherwise the model's training default (``llama.context_length``
-    or similar). Ollama defaults to 2048 or 4096 when neither is
-    specified in a Modelfile — we return the explicit setting when
-    available, which is what actually gets enforced at inference time.
     """
     base = base_url.rstrip("/")
     try:
@@ -64,29 +82,41 @@ def model_context_window(base_url: str, model: str, timeout: float = 4.0) -> int
     except Exception:
         return None
 
-    # 1. Look in the parsed parameters string first — this is the
-    # Modelfile-configured value that Ollama actually enforces.
+    # Look for the architectural ceiling first — present on any
+    # legitimate Ollama response for a loaded model.
+    architectural: int | None = None
+    model_info = data.get("model_info") or {}
+    for key, val in model_info.items():
+        if isinstance(key, str) and key.endswith(".context_length"):
+            try:
+                architectural = int(val)
+                break
+            except (TypeError, ValueError):
+                pass
+
+    # If we couldn't even find the architectural max, this probably
+    # isn't an Ollama response (or the model wasn't loaded).
+    if architectural is None:
+        return None
+
+    # Now find the effective num_ctx. If the Modelfile sets it, that
+    # value wins. Otherwise Ollama serves its default (4096 on
+    # current builds) regardless of what the model was trained for.
     params_text = data.get("parameters") or ""
+    effective: int = _OLLAMA_DEFAULT_NUM_CTX
     if isinstance(params_text, str):
         import re as _re
         m = _re.search(r"num_ctx\s+(\d+)", params_text)
         if m:
             try:
-                return int(m.group(1))
+                effective = int(m.group(1))
             except ValueError:
                 pass
 
-    # 2. Fall back to the model's architectural context length. This
-    # is an upper bound — the *actual* runtime context is what the
-    # Modelfile specifies, or Ollama's default (2048/4096) if absent.
-    model_info = data.get("model_info") or {}
-    for key, val in model_info.items():
-        if isinstance(key, str) and key.endswith(".context_length"):
-            try:
-                return int(val)
-            except (TypeError, ValueError):
-                pass
-    return None
+    # Clamp effective to the architectural max — Ollama won't serve
+    # above the model's training ceiling even if a Modelfile asks.
+    effective = min(effective, architectural)
+    return effective, architectural
 
 
 def list_models(base_url: str, timeout: float = 4.0) -> list[str]:

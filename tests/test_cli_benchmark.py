@@ -1099,7 +1099,7 @@ def test_benchmark_errored_turn_excluded_from_history():
 # ── Fix 3: Context-window preflight ────────────────────────────────
 
 
-def test_model_context_window_parses_ollama_parameters(monkeypatch):
+def test_model_context_window_parses_modelfile_num_ctx(monkeypatch):
     from sieve import _wizard_helpers
     def mock_post(url, **kwargs):
         return httpx.Response(
@@ -1112,22 +1112,48 @@ def test_model_context_window_parses_ollama_parameters(monkeypatch):
         )
     monkeypatch.setattr(httpx, "post", mock_post)
     ctx = _wizard_helpers.model_context_window("http://x", "m")
-    # Modelfile-set value wins over architectural max.
-    assert ctx == 32768
+    # Modelfile value is the effective; architectural is the ceiling.
+    assert ctx == (32768, 131072)
 
 
-def test_model_context_window_falls_back_to_architectural(monkeypatch):
+def test_model_context_window_uses_ollama_default_when_no_num_ctx(monkeypatch):
+    """When the Modelfile doesn't set num_ctx, Ollama enforces a default
+    (4096 on current builds) regardless of the architectural max. This
+    is the exact failure mode that caused qwen3.5:35b to 500 — its
+    architectural max is 262K but Ollama serves 4K by default."""
     from sieve import _wizard_helpers
     def mock_post(url, **kwargs):
         return httpx.Response(
             200,
             json={
-                "parameters": "",  # no num_ctx configured
+                # No num_ctx in parameters — just other knobs.
+                "parameters": "temperature 1\ntop_k 20",
+                "model_info": {"qwen35moe.context_length": 262144},
+            },
+        )
+    monkeypatch.setattr(httpx, "post", mock_post)
+    effective, architectural = _wizard_helpers.model_context_window("http://x", "m")
+    # Effective == Ollama default (4096), architectural == trained ceiling.
+    assert effective == 4096
+    assert architectural == 262144
+
+
+def test_model_context_window_clamps_effective_to_architectural(monkeypatch):
+    """If someone Modelfile-sets num_ctx above the architectural max,
+    Ollama silently clamps — we do the same in the report."""
+    from sieve import _wizard_helpers
+    def mock_post(url, **kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "parameters": "num_ctx 999999",
                 "model_info": {"llama.context_length": 8192},
             },
         )
     monkeypatch.setattr(httpx, "post", mock_post)
-    assert _wizard_helpers.model_context_window("http://x", "m") == 8192
+    effective, architectural = _wizard_helpers.model_context_window("http://x", "m")
+    assert effective == 8192
+    assert architectural == 8192
 
 
 def test_model_context_window_returns_none_on_404(monkeypatch):
@@ -1147,6 +1173,17 @@ def test_model_context_window_returns_none_on_network_error(monkeypatch):
         raise httpx.ConnectError("refused", request=None)
     monkeypatch.setattr(httpx, "post", mock_post)
     assert _wizard_helpers.model_context_window("http://down", "m") is None
+
+
+def test_model_context_window_returns_none_when_no_architectural_found(monkeypatch):
+    """If the response shape doesn't include a .context_length key we
+    can't determine anything honest — return None so the caller
+    skips the preflight rather than guessing."""
+    from sieve import _wizard_helpers
+    def mock_post(url, **kwargs):
+        return httpx.Response(200, json={"parameters": "", "model_info": {}})
+    monkeypatch.setattr(httpx, "post", mock_post)
+    assert _wizard_helpers.model_context_window("http://x", "m") is None
 
 
 # ── Render includes errors panel ───────────────────────────────────
