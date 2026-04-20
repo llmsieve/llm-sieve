@@ -27,11 +27,30 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-@click.group()
+POST_INSTALL_HINT = (
+    "Sieve installed successfully! Run [cyan]sieve init[/] to get started, "
+    "or [cyan]sieve init --wizard[/] for guided setup."
+)
+
+
+@click.group(invoke_without_command=True)
 @click.version_option(package_name="llm-sieve", prog_name="sieve")
-def cli():
-    """Sieve — Transparent context reduction for LLMs."""
-    pass
+@click.pass_context
+def cli(ctx: click.Context):
+    """Sieve — Transparent context reduction for LLMs.
+
+    After install, run `sieve init` (or `sieve init --wizard`) to create
+    the configuration file, download the embedding model, and initialise
+    the encrypted memory store. Then `sieve start` to run the proxy.
+    """
+    # No subcommand — show the post-install guidance so a fresh
+    # `pip install llm-sieve; sieve` user has a clear next step rather
+    # than the bare Click usage dump.
+    if ctx.invoked_subcommand is None:
+        console.print(f"[bold green]Sieve[/] — {POST_INSTALL_HINT}")
+        console.print(
+            "\n[dim]Run [cyan]sieve --help[/] for the full command list.[/]"
+        )
 
 
 SIEVE_DIR = Path("~/.sieve").expanduser()
@@ -50,8 +69,26 @@ def _config_exists(config_path: str | None) -> bool:
 @click.option("--host", default=None, help="Override listen host")
 @click.option("--port", "-p", default=None, type=int, help="Override listen port")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
-def start(config_path: str | None, host: str | None, port: int | None, verbose: bool):
-    """Start the Sieve proxy server."""
+@click.option(
+    "--foreground",
+    "-f",
+    is_flag=True,
+    help="Run in foreground instead of daemonising. Useful for debugging "
+    "— logs go to the terminal and Ctrl+C stops the proxy.",
+)
+def start(
+    config_path: str | None,
+    host: str | None,
+    port: int | None,
+    verbose: bool,
+    foreground: bool,
+):
+    """Start the Sieve proxy server.
+
+    By default this daemonises into the background so the terminal is
+    freed. Pass ``--foreground`` / ``-f`` to run attached to the TTY for
+    debugging.
+    """
     _setup_logging(verbose)
 
     if not _config_exists(config_path):
@@ -72,6 +109,17 @@ def start(config_path: str | None, host: str | None, port: int | None, verbose: 
     if port:
         config.listen.port = port
 
+    # Refuse to start a second daemon if one is already running — reading
+    # a stale PID file is harmless (helper auto-cleans) but a live PID
+    # means the user should `sieve stop` first.
+    existing = _read_pid()
+    if existing is not None:
+        console.print(
+            f"[bold yellow]Sieve is already running[/] (pid {existing}). "
+            f"Use [cyan]sieve stop[/] or [cyan]sieve restart[/] first."
+        )
+        sys.exit(1)
+
     # Fail fast if the configured port is already bound — Phase 7 Test 5.
     import socket
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -87,8 +135,23 @@ def start(config_path: str | None, host: str | None, port: int | None, verbose: 
     finally:
         probe.close()
 
-    # Write PID file so `sieve stop` / `sieve status` can find us.
     SIEVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if foreground:
+        _run_proxy_foreground(config, verbose)
+        return
+
+    _daemonise_and_run(config, verbose)
+
+
+def _run_proxy_foreground(config: RecallConfig, verbose: bool) -> None:
+    """Run the uvicorn server attached to the current terminal.
+
+    Used by ``sieve start --foreground`` (debugging) and as the child
+    half of the daemon fork. Writes the PID file on entry and removes
+    it on normal exit so ``sieve status`` / ``sieve stop`` see the
+    process correctly.
+    """
     PID_FILE.write_text(str(os.getpid()))
 
     console.print(
@@ -111,6 +174,108 @@ def start(config_path: str | None, host: str | None, port: int | None, verbose: 
             PID_FILE.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+def _daemonise_and_run(config: RecallConfig, verbose: bool) -> None:
+    """Double-fork to detach from the controlling terminal, then run uvicorn.
+
+    Parent prints the "started" banner with the child PID and returns.
+    The grandchild becomes the proxy: stdin/stdout/stderr redirected to
+    the log file, CWD moved to root, and a new session group created so
+    terminal disconnect doesn't SIGHUP us.
+    """
+    # First fork — parent returns to the CLI. The child continues.
+    try:
+        pid = os.fork()
+    except OSError as exc:
+        console.print(f"[bold red]Daemonise failed:[/] {exc}")
+        sys.exit(1)
+
+    if pid > 0:
+        # Parent: briefly wait for the child to write the PID file so we
+        # can report the child's pid confidently. Fall through to a
+        # generic message if the PID never appears (child died fast).
+        import time
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            child_pid = _read_pid()
+            if child_pid is not None:
+                console.print(
+                    f"[bold green]Sieve[/] started on "
+                    f"[cyan]{config.listen.host}:{config.listen.port}[/] "
+                    f"(PID {child_pid})"
+                )
+                console.print(f"  Logs: [dim]{LOG_FILE}[/]")
+                console.print(
+                    f"  Stop with: [cyan]sieve stop[/]  "
+                    f"Status: [cyan]sieve status[/]"
+                )
+                return
+            time.sleep(0.1)
+        console.print(
+            "[yellow]Sieve started but did not report its PID within 5s.[/] "
+            f"Check [dim]{LOG_FILE}[/] — the process may have failed to bind."
+        )
+        return
+
+    # Child — detach from the terminal and become a session leader.
+    try:
+        os.setsid()
+    except OSError:
+        pass
+
+    # Second fork so the daemon is not a session leader and can never
+    # reacquire a controlling terminal.
+    try:
+        pid2 = os.fork()
+    except OSError:
+        os._exit(1)
+    if pid2 > 0:
+        os._exit(0)
+
+    os.chdir("/")
+    os.umask(0o027)
+
+    # Redirect standard streams to the log file so stray prints don't
+    # break on a closed TTY and the operator can tail logs.
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    log_fd = os.open(
+        str(LOG_FILE),
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o640,
+    )
+    os.dup2(devnull, sys.stdin.fileno())
+    os.dup2(log_fd, sys.stdout.fileno())
+    os.dup2(log_fd, sys.stderr.fileno())
+    os.close(devnull)
+    os.close(log_fd)
+
+    # Write the PID file now that we are the final daemon process.
+    try:
+        PID_FILE.write_text(str(os.getpid()))
+    except Exception:
+        os._exit(1)
+
+    try:
+        uvicorn.run(
+            "sieve.main:app",
+            host=config.listen.host,
+            port=config.listen.port,
+            log_level="debug" if verbose else "info",
+            factory=False,
+        )
+    finally:
+        try:
+            PID_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+        os._exit(0)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -1230,10 +1395,32 @@ def demo(wait_for_write: bool, max_wait: float):
         # Wait for the async writer to commit before the next turn so
         # later retrievals see the fact. Only waits on turns that should
         # produce new facts; queries (turns 4–6) run back-to-back.
+        # The proxy awaits the writer inline during OBSERVE so this
+        # poll only matters on ACCUMULATE/ACTIVATE — kept in for
+        # backwards-compatible behaviour against older proxies.
         if wait_for_write and ms is not None and expect_new_fact[i - 1] and i < len(messages):
             deadline = time.monotonic() + max_wait
             while time.monotonic() < deadline and fact_count() <= before:
                 time.sleep(0.3)
+
+        # Fact-count telemetry — always print after any wait so the
+        # number reflects what's actually committed to the store. Warn
+        # loudly when a seeding turn failed to add any fact because
+        # that indicates the writer's extraction regex/S2 missed this
+        # message and the next retrieval query will probably fail too.
+        after = fact_count()
+        delta = after - before
+        if expect_new_fact[i - 1]:
+            if delta > 0:
+                console.print(
+                    f"        [dim]📝 Facts: {after} ([green]+{delta}[/])[/]"
+                )
+            else:
+                console.print(
+                    f"        [yellow]📝 Facts: {after} (no growth — writer missed this turn)[/]"
+                )
+        else:
+            console.print(f"        [dim]📝 Facts: {after}[/]")
         console.print()
 
     if ms is not None:

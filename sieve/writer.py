@@ -134,6 +134,23 @@ _pat("pet_named",
 _pat("we_have_relation_named",
      rf"\bwe\s+have\s+(?:a\s+|an\s+)?(?:\w+\s+)?({_RELATION_WORDS})\s+(?:[A-Za-z]{{1,20}}\s+)?(?:is\s+)?(?:named|called)\s+([A-Z][A-Za-z '\-]{{1,30}}?)(?:[,\.!?]|$)",
      "objective", "relationship")
+# "I have a dog called Mabel" / "I have a cat named Luna" — seeds the pet
+# identity directly so follow-ups ("What breed is Mabel?") can retrieve
+# the animal entity even if the user never said "my dog".
+_pat("i_have_pet_named",
+     r"\bi\s+have\s+(?:a\s+|an\s+|another\s+)?(cat|dog|pet|puppy|kitten|rabbit|hamster|bird|parrot)\s+(?:named\s+|called\s+)([A-Z][A-Za-z '\-]{1,30}?)(?:[,\.!?]|$)",
+     "objective", "relationship")
+# Pet breed: "Mabel is a border terrier" / "she's a border terrier" /
+# "he's a golden retriever". Captures the breed as a discrete fact so
+# the breed-query path can hit it on its own embedding. The breed slot
+# is deliberately liberal (any lowercase noun phrase up to a sentence
+# boundary) because breed names vary too much to enumerate.
+_pat("pet_breed_named_subject",
+     r"\b([A-Z][a-z]{1,20})\s+is\s+(?:a\s+|an\s+)?([a-z][a-z \-]{3,40}?(?:terrier|retriever|spaniel|poodle|bulldog|shepherd|collie|husky|beagle|labrador|pug|dachshund|chihuahua|mastiff|pointer|setter|boxer|corgi|whippet|greyhound|ridgeback|hound|cat|kitten|tabby|siamese|persian|ragdoll|maine\s+coon|sphynx))\b",
+     "objective", "pet_breed")
+_pat("pet_breed_pronoun",
+     r"\b(?:she|he|it)(?:'s|\s+is)\s+(?:a\s+|an\s+)?([a-z][a-z \-]{3,40}?(?:terrier|retriever|spaniel|poodle|bulldog|shepherd|collie|husky|beagle|labrador|pug|dachshund|chihuahua|mastiff|pointer|setter|boxer|corgi|whippet|greyhound|ridgeback|hound|tabby|siamese|persian|ragdoll))\b",
+     "objective", "pet_breed")
 
 # Temporal / age
 _pat("age",
@@ -223,6 +240,9 @@ _COMMON_WORDS = frozenset({
     "July", "August", "September", "October", "November", "December",
     "Ok", "Okay", "Yes", "No", "Hi", "Hello", "Thanks", "Thank",
 })
+# Lowercase index of the same set — used by pet_breed handler to reject
+# "She is a border terrier" capturing "She" as the subject name.
+_COMMON_WORDS_LOWER = frozenset(w.lower() for w in _COMMON_WORDS)
 
 
 # ─── Extracted candidates ───────────────────────────────────────────────────────
@@ -453,6 +473,27 @@ def extract_facts_s1(text: str) -> list[ExtractedFact]:
                                 _add(f"User is allergic to {item}", fact_type, category)
                     else:
                         _add(f"User is allergic to {val}", fact_type, category)
+
+            elif category == "pet_breed":
+                # Two shapes:
+                #   pet_breed_named_subject → groups = [Name, breed]
+                #   pet_breed_pronoun       → groups = [breed]
+                if len(groups) >= 2:
+                    name = groups[0].strip().rstrip(".,!?")
+                    breed = groups[1].strip().rstrip(".,!?")
+                    if name and breed and name.lower() not in _COMMON_WORDS_LOWER:
+                        _add(
+                            f"{name} is a {breed}",
+                            fact_type, category,
+                            entity_names=[name],
+                        )
+                elif len(groups) == 1:
+                    breed = groups[0].strip().rstrip(".,!?")
+                    if breed:
+                        _add(
+                            f"User's pet is a {breed}",
+                            fact_type, category,
+                        )
 
     return results
 

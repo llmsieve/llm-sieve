@@ -543,19 +543,34 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         except Exception:
             return ""
 
-    def _fire_writer(
+    async def _fire_writer(
         user_text: str,
         session_id: str,
         metrics=None,
         assistant_text: str = "",
+        phase=None,
     ) -> None:
-        """Schedule writer.process() as a background task — never blocks the response.
+        """Run writer.process() either sync (OBSERVE) or fire-and-forget (later phases).
 
-        When ``metrics`` is supplied (validation runs) the task reference
-        is attached as ``metrics.writer_task`` so the response-finalise
-        path can await it via ``_await_writer_and_record`` and copy
-        stage-level stats into the per-request row. Production callers
-        pass ``metrics=None`` and the behaviour is unchanged.
+        OBSERVE phase aggressively seeds the store — the user has just
+        started using Sieve, retrieval results will be thin, and the
+        next turn probably references what was just said. Awaiting the
+        writer adds ~200ms (S1) to ~2s (S2+episode) per turn but
+        guarantees the fresh fact is visible on the next turn. Without
+        this, the 5-turn demo (and any brand-new user) races ahead of
+        the writer and the assistant replies "I don't know" even though
+        the fact was stated one turn ago.
+
+        ACCUMULATE / ACTIVATE keep the fire-and-forget behaviour: by
+        then the store has enough baseline that retrieval works even if
+        the latest turn's fact is a few hundred ms behind.
+
+        When ``metrics`` is supplied (validation runs) the task
+        reference is attached as ``metrics.writer_task`` so the
+        response-finalise path can await it via
+        ``_await_writer_and_record`` and copy stage-level stats. For
+        the OBSERVE-sync path we attach a pre-completed task so the
+        same rendezvous code works unchanged.
 
         ``assistant_text`` lets the writer request a one-sentence
         episode summary from the main model. Empty = fall back to the
@@ -563,6 +578,29 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         """
         if memory_writer is None or not memory_store._conn or not user_text.strip():
             return
+
+        # OBSERVE: await the writer inline so the fact is committed
+        # before the response returns. This is the cold-start fix.
+        if phase is not None and phase.label == "OBSERVE":
+            try:
+                write_result = await memory_writer.process(
+                    user_text,
+                    assistant_text=assistant_text,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                logger.warning("OBSERVE writer raised: %s", exc)
+                write_result = None
+            if metrics is not None and write_result is not None:
+                # Mirror the rendezvous-helper behaviour: copy stage
+                # stats onto the metrics row so validation still sees
+                # them on the sync path.
+                try:
+                    validation_collector.record_writer_result(metrics, write_result)
+                except Exception as exc:
+                    logger.debug("record_writer_result on sync path failed: %s", exc)
+            return
+
         task = asyncio.create_task(
             memory_writer.process(
                 user_text,
@@ -1349,9 +1387,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             )
             recall_rounds = int(response.headers.get("X-Sieve-Rounds", "0"))
             assistant_text = _response_assistant_text(response, "ollama")
-            _fire_writer(
+            await _fire_writer(
                 user_text, session_id=uuid.uuid4().hex, metrics=val_metrics,
-                assistant_text=assistant_text,
+                assistant_text=assistant_text, phase=phase,
             )
             _fire_learning(user_text, recall_rounds=recall_rounds)
             response = _wrap_validation_response(
@@ -1445,9 +1483,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             )
             recall_rounds = int(response.headers.get("X-Sieve-Rounds", "0"))
             assistant_text = _response_assistant_text(response, "openai")
-            _fire_writer(
+            await _fire_writer(
                 user_text, session_id=uuid.uuid4().hex, metrics=val_metrics,
-                assistant_text=assistant_text,
+                assistant_text=assistant_text, phase=phase,
             )
             _fire_learning(user_text, recall_rounds=recall_rounds)
             response = _wrap_validation_response(

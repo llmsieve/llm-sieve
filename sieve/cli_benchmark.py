@@ -277,13 +277,25 @@ def render_summary(
     table.add_column("Facts", justify="right")
     table.add_column("Time", justify="right")
 
+    # Track phase transitions so we can annotate where OBSERVE →
+    # ACCUMULATE → ACTIVATE happen in the conversation. The transition
+    # column is the empty string on all rows except the first one of a
+    # new phase; this keeps the table readable while making the shift
+    # obvious.
+    prev_activation = ""
     for t in summary.turns:
         cut = "—"
         if t.inbound_tokens:
             pct = (t.inbound_tokens - t.outbound_tokens) / t.inbound_tokens * 100
             cut = f"{pct:+.0f}%" if pct < 0 else f"{pct:.0f}%"
         facts_delta = t.facts_after - t.facts_before
-        facts = f"{t.facts_after}" + (f" [green](+{facts_delta})[/]" if facts_delta > 0 else "")
+        # Always render the fact count so readers can see the store
+        # growing message-by-message, not only on gain turns. A plain
+        # number reads cleanly next to a coloured delta.
+        if facts_delta > 0:
+            facts = f"{t.facts_after} [green](+{facts_delta})[/]"
+        else:
+            facts = f"{t.facts_after}"
         phase_label = {
             "introduce": "intro",
             "retrieve": "recall",
@@ -300,6 +312,13 @@ def render_summary(
             "ACCUMULATE": "[yellow]acc[/]",
             "ACTIVATE": "[green]act[/]",
         }.get(ap, "[dim]—[/]")
+        # Decorate the badge with an → marker on the first message of a
+        # new phase so the transition is visually obvious without a
+        # dedicated transitions panel.
+        if ap and ap != prev_activation and prev_activation:
+            activation_badge = f"{activation_badge} [bold]↗[/]"
+        if ap:
+            prev_activation = ap
         table.add_row(
             str(t.index),
             phase_label,
@@ -313,6 +332,28 @@ def render_summary(
         )
 
     console.print(table)
+
+    # Phase-transition summary — a dedicated one-liner list so the
+    # transitions are discoverable at a glance even if the table badge
+    # is missed. Only emitted when the proxy reported at least one
+    # phase transition during the run.
+    transitions: list[tuple[int, str, str]] = []
+    last = ""
+    for t in summary.turns:
+        ap = (t.activation_phase or "").upper()
+        if not ap:
+            continue
+        if last and ap != last:
+            transitions.append((t.index, last, ap))
+        last = ap
+    if transitions:
+        console.print(
+            "[bold]Phase transitions:[/] "
+            + "  ".join(
+                f"turn {idx}: [dim]{src}[/] → [bold]{dst}[/]"
+                for idx, src, dst in transitions
+            )
+        )
 
     # Per-phase reduction breakdown — makes the phase transitions
     # visible at a glance. Skipped when the proxy doesn't emit the
