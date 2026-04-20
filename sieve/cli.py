@@ -15,7 +15,24 @@ from rich.logging import RichHandler
 
 from sieve.config import RecallConfig
 
-console = Console(width=240)
+
+def _console_width() -> int:
+    """Target console width: capped at 120 cols, floored at 80.
+
+    Most terminals are ≥100 cols. A 240-col render wraps unreadably on
+    80-col windows and sprawls on typical 120-col ones. 120 is the
+    sweet spot — readable at any sensible width, and the renders we
+    ship (tables, panels, headlines) are designed to fit within it.
+    """
+    try:
+        import shutil
+        actual = shutil.get_terminal_size((100, 24)).columns
+    except Exception:
+        actual = 100
+    return max(80, min(120, actual))
+
+
+console = Console(width=_console_width())
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -1641,13 +1658,14 @@ def benchmark(
     model_name = model or config.provider.default_model
     grader_name = grader_model or model_name
 
+    direct_base = config.provider.base_url
+
     if run_wizard:
         (fixture, model_name, grader_name, turns, runs, pricing,
          output_format) = _benchmark_wizard(
             fixture, model_name, grader_name, turns, runs, pricing, output_format,
+            provider_base_url=direct_base,
         )
-
-    direct_base = config.provider.base_url
 
     # Context-window warning for heavy fixtures on local models.
     skipped_fixtures: list[str] = []
@@ -1681,6 +1699,76 @@ def benchmark(
                     f"'{fixture}' accepted by user despite local-endpoint "
                     f"warning; baseline may truncate."
                 )
+
+    # Precise context-window preflight: consult /api/show to get the
+    # model's *actual* num_ctx, then estimate what the fixture needs
+    # at turn 15 (base payload × ~2 for history + tools + replies).
+    # Skipped silently on non-Ollama endpoints (OpenAI etc. 404).
+    cwin_precise_text: str | None = None
+    from sieve._wizard_helpers import model_context_window
+    from sieve._agent_fixture import fixture_approx_tokens
+    ctx_limit = model_context_window(direct_base, model_name)
+    if ctx_limit is not None:
+        # Estimated peak: base (system prompt + tools) + ~1× growing
+        # history by turn 15 on the growing-agent script. The ×1.8
+        # multiplier matches what real fixtures produce in practice
+        # (measured on medium, large, xlarge).
+        fixture_peak = int(fixture_approx_tokens(fixture) * 1.8)
+        if fixture_peak > ctx_limit:
+            msg = (
+                f"Model '{model_name}' reports num_ctx={ctx_limit:,} but "
+                f"fixture '{fixture}' peaks at ~{fixture_peak:,} tokens/turn "
+                f"by turn {turns}.\n"
+                f"  Baseline will likely error or truncate on turn "
+                f"{max(1, ctx_limit // max(1, fixture_approx_tokens(fixture) // 2))} "
+                f"onwards.\n"
+                f"  Options:\n"
+                f"    [a] Continue anyway (baseline errors logged in report)\n"
+                f"    [b] Drop to a smaller fixture (e.g. --fixture "
+                f"{'small' if fixture != 'small' else fixture})\n"
+                f"    [c] Raise num_ctx with a Modelfile:\n"
+                f"         [dim]ollama show {model_name} --modelfile > Modelfile[/]\n"
+                f"         [dim]# add/replace: PARAMETER num_ctx {max(ctx_limit * 2, 32768)}[/]\n"
+                f"         [dim]ollama create {model_name}-ctx{max(ctx_limit * 2, 32768)} -f Modelfile[/]"
+            )
+            if no_input:
+                cwin_precise_text = (
+                    f"model num_ctx={ctx_limit:,} < fixture peak "
+                    f"~{fixture_peak:,}; --no-input so continued; errors "
+                    "likely in baseline pass."
+                )
+                console.print()
+                console.print(Panel_lite_warning(msg))
+                console.print(
+                    "[dim](--no-input set — continuing with known context "
+                    "overflow. Errors will be surfaced in the report.)[/]"
+                )
+            else:
+                console.print()
+                console.print(Panel_lite_warning(msg))
+                go = click.confirm(
+                    "Continue anyway (option [a])?",
+                    default=False,
+                )
+                if not go:
+                    console.print(
+                        "[yellow]Cancelled. Re-run with a smaller --fixture "
+                        "or a model with a larger context window.[/]"
+                    )
+                    sys.exit(0)
+                cwin_precise_text = (
+                    f"User continued with model num_ctx={ctx_limit:,} < fixture "
+                    f"peak ~{fixture_peak:,}; expect baseline errors."
+                )
+
+    # Merge the precise and heuristic warnings into one bullet so
+    # the report's limitations section records everything that
+    # applied to this run.
+    if cwin_precise_text:
+        if cwin_warning_text:
+            cwin_warning_text = cwin_warning_text + " " + cwin_precise_text
+        else:
+            cwin_warning_text = cwin_precise_text
 
     self_grading = (grader_name == model_name)
     if self_grading:
@@ -1772,8 +1860,16 @@ def benchmark(
         console.print("\n[yellow]Benchmark interrupted — sandbox cleaned up.[/]")
         sys.exit(130)
     except Exception as exc:
+        # Clean, non-tracebacked error for the user. Full traceback is
+        # still available via `sieve --verbose benchmark` for the rare
+        # case a dev wants it.
         console.print(f"[bold red]Benchmark failed:[/] {exc}")
-        raise
+        from sieve.cli_benchmark import UpstreamLLMError
+        if isinstance(exc, UpstreamLLMError):
+            hint = exc.user_hint()
+            if hint:
+                console.print(f"\n[bold]Hint:[/] {hint}")
+        sys.exit(1)
 
 
 def Panel_lite_warning(text: str):
@@ -1808,96 +1904,162 @@ def _benchmark_wizard(
     runs_default: int,
     pricing_default: str,
     format_default: str,
+    *,
+    provider_base_url: str = "",
 ):
-    """Interactive menu. Each answer maps 1:1 to a flag.
+    """Numbered-prompt wizard. Each answer maps 1:1 to a flag.
 
-    Ends by echoing the equivalent flag-form command so the user can
-    paste it into CI or sharing.
+    Model selection queries the live provider endpoint (``/api/tags``
+    for Ollama, ``/v1/models`` as fallback). If the endpoint is down
+    or returns no models, falls back to a free-text prompt so the
+    user is never stuck.
+
+    Ends by echoing the equivalent flag-form command so CI / teammates
+    can reproduce the run exactly.
     """
-    from sieve._agent_fixture import fixture_names
+    from sieve._agent_fixture import (
+        fixture_names, fixture_approx_tokens, fixture_description,
+    )
+    from sieve._wizard_helpers import NumberedChoice, pick_numbered, pick_model
 
     console.print()
     console.print("[bold]Sieve benchmark setup[/]")
     console.print(
-        "[dim]Customise, or accept defaults. Each option maps to a "
-        "flag — the equivalent command is shown at the end.[/]\n"
+        "[dim]Choose a number at each prompt, or press enter for the "
+        "default (marked with *). Each choice maps to a command-line "
+        "flag — the equivalent command is shown at the end for CI / "
+        "sharing.[/]"
     )
 
-    # Fixture
-    console.print("[bold]Agent payload size:[/]")
-    for name in fixture_names():
-        marker = " (default)" if name == fixture_default else ""
-        console.print(f"  {_fixture_menu_label(name)}{marker}")
-    fixture = click.prompt(
-        "Choose fixture",
-        type=click.Choice(fixture_names(), case_sensitive=False),
+    # ── Fixture ─────────────────────────────────────────────────────
+    fixture_choices = [
+        NumberedChoice(
+            label=f"{name:<7} (~{fixture_approx_tokens(name):,} base tokens)",
+            value=name,
+            help=fixture_description(name),
+        )
+        for name in fixture_names()
+    ]
+    fixture = pick_numbered(
+        "Agent payload size",
+        fixture_choices,
         default=fixture_default,
-        show_default=True,
+        console=console,
     )
 
-    # Model
-    model_name = click.prompt(
-        "\nModel to test",
-        default=model_default,
-        show_default=True,
-    ).strip()
-
-    # Grader model
-    console.print(
-        "\n[dim]The grader answers yes/no on each recall + trap. "
-        "Using the same model as the one being tested is 'self-grading' "
-        "— skeptics will flag it. For shareable reports, choose a "
-        "different grader.[/]"
-    )
-    grader_name = click.prompt(
-        "Grader model (Enter for same as test model)",
-        default=grader_default,
-        show_default=True,
-    ).strip()
-
-    # Turns
-    turns = click.prompt(
-        "\nTurns per run",
-        type=int,
-        default=turns_default,
-        show_default=True,
-    )
-
-    # Runs
-    console.print(
-        "\n[dim]More runs = tighter stddev estimate. "
-        "Each run adds ~1-3 minutes depending on model speed.[/]"
-    )
-    runs = click.prompt(
-        "Number of runs",
-        type=int,
-        default=runs_default,
-        show_default=True,
-    )
-
-    # Pricing
-    console.print(
-        "\n[bold]Pricing tier[/] (for cost panel — 'local' means no "
-        "$ shown):"
-    )
-    pricing = click.prompt(
-        "Pricing",
-        type=click.Choice(list(_PRICING_CHOICES), case_sensitive=False),
-        default=pricing_default,
-        show_default=True,
-    )
-
-    # Output format
-    output_format = click.prompt(
-        "\nTerminal output format",
-        type=click.Choice(["rich", "json", "markdown"], case_sensitive=False),
-        default=format_default,
-        show_default=True,
-    )
-
-    # Equivalent command — the "paste into CI" line.
+    # ── Model to test ──────────────────────────────────────────────
     console.print()
-    console.print("[bold]Equivalent command:[/]")
+    console.print("[bold]Model to test[/]")
+    console.print(f"[dim]Fetching available models from {provider_base_url}…[/]")
+    model_name = pick_model(
+        "Pick the model you want to benchmark",
+        base_url=provider_base_url,
+        default=model_default,
+        console=console,
+    )
+
+    # ── Grader model ───────────────────────────────────────────────
+    # Scientific framing — the research found that skeptic-friendly
+    # benchmarks name bias risks explicitly rather than hiding them.
+    console.print()
+    console.print("[bold]Grader model[/]")
+    console.print(
+        "[dim]The grader answers yes/no on each recall and on the "
+        "trap turn. Rigorous benchmarks use an independent grader — "
+        "same-model grading introduces bias because the model has "
+        "access to the same reasoning patterns that produced the "
+        "answer.[/]"
+    )
+    # Pre-seed the grader picker so the test model is hidden — nudges
+    # toward choosing a different one without forcing it.
+    grader_name = pick_model(
+        "Pick a grader",
+        base_url=provider_base_url,
+        default=grader_default,
+        console=console,
+        exclude=None,  # keep all models visible; just nudge via the help text
+    )
+
+    # ── Turns ──────────────────────────────────────────────────────
+    console.print()
+    turns_choices = [
+        NumberedChoice(label="6 — quick smoke test", value="6"),
+        NumberedChoice(label="15 — standard script (intros + recalls + trap)", value="15"),
+        NumberedChoice(label="30 — longer conversation", value="30"),
+        NumberedChoice(label="60 — stress test", value="60"),
+    ]
+    turns_raw = pick_numbered(
+        "Turns per run",
+        turns_choices,
+        default=str(turns_default),
+        console=console,
+        allow_free_text=True,
+        free_text_prompt="Enter a turn count",
+    )
+    try:
+        turns = max(3, int(turns_raw))
+    except ValueError:
+        turns = turns_default
+
+    # ── Runs ───────────────────────────────────────────────────────
+    console.print()
+    console.print(
+        "[dim]More runs produce a tighter stddev estimate. A single run "
+        "reports point-in-time results with no error bars. 3+ runs is "
+        "standard for benchmarks intended for publication.[/]"
+    )
+    runs_choices = [
+        NumberedChoice(label="1 — point-in-time, no error bars", value="1"),
+        NumberedChoice(label="3 — stddev estimate (recommended)", value="3"),
+        NumberedChoice(label="5 — tighter confidence", value="5"),
+    ]
+    runs_raw = pick_numbered(
+        "Number of runs",
+        runs_choices,
+        default=str(runs_default),
+        console=console,
+        allow_free_text=True,
+        free_text_prompt="Enter a run count",
+    )
+    try:
+        runs = max(1, int(runs_raw))
+    except ValueError:
+        runs = runs_default
+
+    # ── Pricing tier ────────────────────────────────────────────────
+    console.print()
+    pricing_choices = [
+        NumberedChoice(label="local — no $ shown (local inference is free)", value="local"),
+        NumberedChoice(label="claude-haiku    — Anthropic Claude Haiku ($0.80 / 1M in)",  value="claude-haiku"),
+        NumberedChoice(label="claude-sonnet   — Anthropic Claude Sonnet ($3.00 / 1M in)", value="claude-sonnet"),
+        NumberedChoice(label="claude-opus     — Anthropic Claude Opus ($15.00 / 1M in)",  value="claude-opus"),
+        NumberedChoice(label="gpt-4o-mini     — OpenAI GPT-4o mini ($0.15 / 1M in)",      value="gpt-4o-mini"),
+        NumberedChoice(label="gpt-4o          — OpenAI GPT-4o ($2.50 / 1M in)",           value="gpt-4o"),
+    ]
+    pricing = pick_numbered(
+        "Pricing tier (for the cost panel)",
+        pricing_choices,
+        default=pricing_default,
+        console=console,
+    )
+
+    # ── Output format ──────────────────────────────────────────────
+    console.print()
+    fmt_choices = [
+        NumberedChoice(label="rich — formatted terminal output", value="rich"),
+        NumberedChoice(label="json — machine-readable for CI / scripting", value="json"),
+        NumberedChoice(label="markdown — paste-into-README artifact", value="markdown"),
+    ]
+    output_format = pick_numbered(
+        "Terminal output format",
+        fmt_choices,
+        default=format_default,
+        console=console,
+    )
+
+    # ── Equivalent command — the "paste into CI" line ─────────────
+    console.print()
+    console.print("[bold]Equivalent command (paste into CI or share with a teammate):[/]")
     console.print(
         f"  [cyan]sieve benchmark --fixture {fixture} --model {model_name} "
         f"--grader-model {grader_name} --turns {turns} --runs {runs} "

@@ -949,3 +949,268 @@ def test_render_aggregated_markdown_has_methodology_and_limitations():
     low = md.lower()
     for adj in forbidden:
         assert adj not in low, f"marketing adjective leaked: {adj!r}"
+
+
+# ── Fix 1: Upstream error surfacing ────────────────────────────────────
+
+
+def test_upstream_llm_error_renders_with_context():
+    from sieve.cli_benchmark import UpstreamLLMError
+    exc = UpstreamLLMError(
+        status=500,
+        url="http://ollama:11434/api/chat",
+        model="qwen3.5:35b",
+        turn=8,
+        phase="deep",
+        upstream_message="context length exceeded",
+    )
+    s = str(exc)
+    assert "500" in s
+    assert "qwen3.5:35b" in s
+    assert "turn=8" in s
+    assert "context length exceeded" in s
+    # user_hint() detects the context-overflow pattern
+    hint = exc.user_hint()
+    assert "context" in hint.lower()
+
+
+def test_upstream_llm_error_hint_model_not_found():
+    from sieve.cli_benchmark import UpstreamLLMError
+    exc = UpstreamLLMError(
+        status=404, url="http://x/y", model="phantom",
+        upstream_message="model 'phantom' not found",
+    )
+    assert "ollama pull" in exc.user_hint().lower()
+
+
+def test_extract_upstream_message_ollama_shape():
+    from sieve.cli_benchmark import _extract_upstream_message
+    import httpx
+    resp = httpx.Response(500, json={"error": "context length exceeded"})
+    assert _extract_upstream_message(resp) == "context length exceeded"
+
+
+def test_extract_upstream_message_openai_shape():
+    from sieve.cli_benchmark import _extract_upstream_message
+    import httpx
+    resp = httpx.Response(400, json={"error": {"message": "invalid model", "type": "bad"}})
+    assert _extract_upstream_message(resp) == "invalid model"
+
+
+def test_extract_upstream_message_fallback_to_raw_body():
+    from sieve.cli_benchmark import _extract_upstream_message
+    import httpx
+    resp = httpx.Response(500, content=b"Internal error: the model crashed")
+    out = _extract_upstream_message(resp)
+    assert "crashed" in out
+
+
+# ── Fix 2: Continue-on-error partial results ─────────────────────────
+
+
+def test_benchmark_continues_after_midrun_500():
+    """A 500 on turn 5 shouldn't abort turns 6-15. The run should
+    produce a summary with errored_turns=1 and the remaining
+    turns completed normally."""
+    from sieve.cli_benchmark import run_benchmark, BENCHMARK_MESSAGES
+
+    call_count = {"n": 0}
+    facts = {"n": 0}
+
+    def handler(request):
+        call_count["n"] += 1
+        # Fail turn 5.
+        if call_count["n"] == 5:
+            return httpx.Response(500, json={"error": "simulated explosion"})
+        turn_idx = call_count["n"] - 1
+        phase = BENCHMARK_MESSAGES[turn_idx]["phase"]
+        if phase in ("introduce", "update"):
+            facts["n"] += 1
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "ok"}, "done": True},
+            headers={
+                "X-Sieve-Inbound-Tokens": "100",
+                "X-Sieve-Outbound-Tokens": "50",
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    summary = run_benchmark(
+        base_url="http://fake",
+        model="m",
+        store_fact_count=lambda: facts["n"],
+        transport=transport,
+        timeout=5.0,
+        stream=False,
+    )
+    # All 15 turns in the result list, one marked as errored.
+    assert len(summary.turns) == 15
+    assert summary.errored_turns == 1
+    assert summary.turns[4].error.startswith("500")
+    # Remaining turns completed normally.
+    assert summary.turns[5].error == ""
+    assert summary.turns[14].error == ""
+    # first_error populated with a human-readable message.
+    assert "simulated explosion" in summary.first_error
+    # The errored turn's response is the placeholder, not an empty string,
+    # so downstream rendering shows the user what happened.
+    assert "(upstream error:" in summary.turns[4].response
+
+
+def test_benchmark_errored_turn_excluded_from_history():
+    """The errored turn should NOT enter conversation history; otherwise
+    the next turn sees '(upstream error: ...)' as a prior assistant
+    reply and would bias the model."""
+    from sieve.cli_benchmark import run_benchmark
+
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content.decode()))
+        turn_idx = len(bodies) - 1
+        # Fail turn 2.
+        if turn_idx == 1:
+            return httpx.Response(500, json={"error": "x"})
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "good reply"}, "done": True},
+            headers={"X-Sieve-Inbound-Tokens": "1", "X-Sieve-Outbound-Tokens": "1"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    run_benchmark(
+        base_url="http://x",
+        model="m",
+        store_fact_count=lambda: 0,
+        transport=transport,
+        timeout=5.0,
+        stream=False,
+    )
+    # Turn 3's request should have: sys(optional) + turn1-user + turn1-assistant + turn3-user.
+    # It should NOT contain any assistant message carrying "(upstream error".
+    turn3 = bodies[2]
+    flattened = json.dumps(turn3)
+    assert "upstream error" not in flattened
+    # Turn 3 should still have turn 1's successful assistant reply in history.
+    assert "good reply" in flattened
+
+
+# ── Fix 3: Context-window preflight ────────────────────────────────
+
+
+def test_model_context_window_parses_ollama_parameters(monkeypatch):
+    from sieve import _wizard_helpers
+    def mock_post(url, **kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "modelfile": "FROM llama3:8b\nPARAMETER num_ctx 32768",
+                "parameters": "num_ctx 32768\nstop \"<|eot_id|>\"",
+                "model_info": {"llama.context_length": 131072},
+            },
+        )
+    monkeypatch.setattr(httpx, "post", mock_post)
+    ctx = _wizard_helpers.model_context_window("http://x", "m")
+    # Modelfile-set value wins over architectural max.
+    assert ctx == 32768
+
+
+def test_model_context_window_falls_back_to_architectural(monkeypatch):
+    from sieve import _wizard_helpers
+    def mock_post(url, **kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "parameters": "",  # no num_ctx configured
+                "model_info": {"llama.context_length": 8192},
+            },
+        )
+    monkeypatch.setattr(httpx, "post", mock_post)
+    assert _wizard_helpers.model_context_window("http://x", "m") == 8192
+
+
+def test_model_context_window_returns_none_on_404(monkeypatch):
+    """Non-Ollama endpoints (OpenAI etc.) 404 /api/show — we must
+    return None so the caller silently skips the preflight rather
+    than warning about a non-existent ceiling."""
+    from sieve import _wizard_helpers
+    def mock_post(url, **kwargs):
+        return httpx.Response(404)
+    monkeypatch.setattr(httpx, "post", mock_post)
+    assert _wizard_helpers.model_context_window("http://openai", "gpt-4o") is None
+
+
+def test_model_context_window_returns_none_on_network_error(monkeypatch):
+    from sieve import _wizard_helpers
+    def mock_post(url, **kwargs):
+        raise httpx.ConnectError("refused", request=None)
+    monkeypatch.setattr(httpx, "post", mock_post)
+    assert _wizard_helpers.model_context_window("http://down", "m") is None
+
+
+# ── Render includes errors panel ───────────────────────────────────
+
+
+def test_render_markdown_shows_errors_section_when_present():
+    from sieve.cli_benchmark import (
+        AggregatedStat, AggregatedCompareSummary, CompareSummary,
+        BenchmarkSummary, render_aggregated_markdown,
+    )
+    base_turns = [
+        TurnResult(
+            index=i, phase=BENCHMARK_MESSAGES[i-1]["phase"],
+            prompt=BENCHMARK_MESSAGES[i-1]["content"],
+            response="ok" if i != 5 else "(upstream error: 500: context length exceeded)",
+            inbound_tokens=1000, outbound_tokens=0 if i == 5 else 500,
+            facts_before=0, facts_after=0, elapsed_s=1.0,
+            absence_signal=None,
+            error="500: context length exceeded" if i == 5 else "",
+        )
+        for i in range(1, 16)
+    ]
+    base = BenchmarkSummary(
+        total_inbound=15000, total_outbound=7000,
+        facts_learned=0, trap_absence_signal=None,
+        turns=base_turns,
+        errored_turns=1,
+        first_error="500 from /api/chat  model=qwen3.5:35b  turn=5 (retrieve)\n  upstream said: context length exceeded",
+    )
+    sie = BenchmarkSummary(
+        total_inbound=300, total_outbound=2000,
+        facts_learned=11, trap_absence_signal=True,
+        correct_recalls=6, gradable_recalls=6,
+        turns=[
+            TurnResult(
+                index=i, phase=BENCHMARK_MESSAGES[i-1]["phase"],
+                prompt=BENCHMARK_MESSAGES[i-1]["content"],
+                response="r", inbound_tokens=200, outbound_tokens=150,
+                facts_before=0, facts_after=0, elapsed_s=1.0, absence_signal=None,
+            ) for i in range(1, 16)
+        ],
+    )
+    cs = CompareSummary(
+        baseline_tokens=15000, sieve_outbound_tokens=2000,
+        sieve_inbound_tokens=300, baseline=base, sieve=sie,
+    )
+    agg = AggregatedCompareSummary(
+        runs=[cs],
+        baseline_tokens=AggregatedStat.from_values([15000.0]),
+        sieve_outbound_tokens=AggregatedStat.from_values([2000.0]),
+        tokens_saved=AggregatedStat.from_values([13000.0]),
+        reduction_pct=AggregatedStat.from_values([86.0]),
+        baseline_wall_clock_s=AggregatedStat.from_values([15.0]),
+        sieve_wall_clock_s=AggregatedStat.from_values([20.0]),
+        correct_recalls_per_run=[6], gradable_recalls=6,
+        trap_absence_per_run=[True],
+        facts_learned_per_run=[11],
+    )
+    md = render_aggregated_markdown(
+        agg, model="qwen3.5:35b", grader_model="qwen3.5:35b",
+        fixture="medium", sieve_base_url="http://sieve",
+        direct_base_url="http://direct", pricing_tier="local",
+    )
+    # Errors section named explicitly and shows the message + hint.
+    assert "## ⚠ Errors encountered" in md
+    assert "context length exceeded" in md
+    assert "Hint:" in md  # actionable hint derived from the error

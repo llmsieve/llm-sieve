@@ -158,6 +158,7 @@ class TurnResult:
     correct_recall: bool | None = None  # None except on retrieve/update
     ttft_s: float = 0.0          # time to first streamed content token
     activation_phase: str = ""   # X-Sieve-Phase header, empty if missing
+    error: str = ""              # upstream LLM error when this turn failed
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,8 @@ class BenchmarkSummary:
     turns: list[TurnResult]
     correct_recalls: int = 0
     gradable_recalls: int = 0
+    errored_turns: int = 0           # turns that raised an upstream error
+    first_error: str = ""            # short message from the first errored turn
 
     @property
     def reduction_pct(self) -> float:
@@ -233,6 +236,126 @@ class CompareSummary:
 
 
 # ── Pure core ────────────────────────────────────────────────────────────
+
+
+class UpstreamLLMError(RuntimeError):
+    """Raised when the configured LLM endpoint returns an error.
+
+    Carries the upstream message verbatim so the user sees what
+    Ollama / OpenAI / etc. actually said — not just "500 Internal
+    Server Error". The root causes for these on real workloads are
+    almost always actionable:
+
+      - "context length exceeded" → raise num_ctx or drop a fixture
+      - "model not found" / "error loading model" → `ollama pull X`
+      - "out of memory" → smaller model, smaller fixture, or Q4/Q5
+
+    Wrapping the raw httpx error lets the CLI render it cleanly
+    instead of dumping a Python traceback on the user.
+    """
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        url: str,
+        model: str = "",
+        turn: int | None = None,
+        phase: str = "",
+        upstream_message: str = "",
+    ):
+        self.status = status
+        self.url = url
+        self.model = model
+        self.turn = turn
+        self.phase = phase
+        self.upstream_message = upstream_message.strip()
+        parts = [f"{status} from {url}"]
+        if model:
+            parts.append(f"model={model}")
+        if turn is not None:
+            parts.append(f"turn={turn} ({phase})" if phase else f"turn={turn}")
+        line1 = "  ".join(parts)
+        msg = f"upstream LLM error: {line1}"
+        if self.upstream_message:
+            msg += f"\n  upstream said: {self.upstream_message}"
+        super().__init__(msg)
+
+    def user_hint(self) -> str:
+        """Return a short actionable hint based on the upstream message."""
+        m = (self.upstream_message or "").lower()
+        if not m:
+            return (
+                "No message body. Check that the model is loaded: "
+                "`ollama list` then `ollama run {model}`."
+            ).format(model=self.model or "<model>")
+        if "context" in m and ("exceed" in m or "length" in m or "too large" in m or "overflow" in m):
+            return (
+                "The baseline payload is larger than the model's context window.\n"
+                "Options: (a) run `--fixture small` or `--fixture medium` instead; "
+                "(b) raise num_ctx on the model with a Modelfile.\n"
+                "(c) use a model with a larger context window."
+            )
+        if "out of memory" in m or "cuda" in m or "oom" in m:
+            return (
+                "The model + context exceeded available VRAM.\n"
+                "Try a smaller quantisation (Q4_K_M), a smaller fixture, or "
+                "unload other models with `ollama stop {other}`."
+            )
+        if "not found" in m or "does not exist" in m:
+            return (
+                "The model isn't available on this endpoint. Pull it first: "
+                "`ollama pull {model}`."
+            ).format(model=self.model or "<model>")
+        if "connection" in m or "refused" in m:
+            return (
+                "Endpoint not reachable. Check that Ollama / the API is "
+                "running at the configured base_url."
+            )
+        return ""
+
+
+def _extract_upstream_message(response) -> str:
+    """Read an httpx response body and pull out the upstream error text.
+
+    Ollama:    ``{"error": "..."}``
+    OpenAI:    ``{"error": {"message": "...", "type": ".."}}``
+    LM Studio: similar to OpenAI.
+
+    Falls back to the raw body (trimmed) when the shape doesn't match
+    either. Swallows any parsing error — the exception class handles
+    empty messages gracefully.
+    """
+    try:
+        # When we opened the response in stream=True mode, the body
+        # hasn't been buffered yet — do it now.
+        try:
+            response.read()
+        except Exception:
+            pass
+        body = None
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("code") or ""
+                if msg:
+                    return str(msg)
+            if isinstance(err, str) and err:
+                return err
+            # Some backends put a bare `message` at the top level.
+            msg = body.get("message") or body.get("detail")
+            if isinstance(msg, str) and msg:
+                return msg
+        text = (response.text or "").strip()
+        if text:
+            return text[:500]
+    except Exception:
+        pass
+    return ""
 
 
 def _approx(text: str) -> int:
@@ -372,64 +495,124 @@ def run_benchmark(
     # the full prior exchange (the realistic agent shape).
     history: list[dict] = []
 
+    errored_turns = 0
+    first_error_msg = ""
+
     with httpx.Client(**client_kwargs) as client:
         for i, msg in enumerate(messages, start=1):
             facts_before = store_fact_count()
             payload = wrap(msg["content"], model, history, stream)
             import time
             t0 = time.perf_counter()
-            if stream:
-                req = client.build_request(
-                    "POST", f"{base_url.rstrip('/')}/api/chat", json=payload,
-                )
-                r = client.send(req, stream=True)
-                try:
-                    r.raise_for_status()
-                    response_text, ttft = _read_streamed_response(r, t0)
-                finally:
-                    r.close()
-                elapsed = time.perf_counter() - t0
-            else:
-                r = client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
-                elapsed = time.perf_counter() - t0
-                r.raise_for_status()
-                data = r.json() if r.content else {}
-                response_text = ((data.get("message") or {}).get("content") or "").strip()
-                ttft = elapsed
 
-            if use_sieve_headers:
-                inbound = int(r.headers.get("X-Sieve-Inbound-Tokens", "0")) or _payload_tokens(payload)
-                outbound = int(r.headers.get("X-Sieve-Outbound-Tokens", "0"))
+            # Per-turn call: catch upstream errors and record a failed
+            # turn so the benchmark produces a partial report rather
+            # than exploding mid-run.
+            error_text = ""
+            response_text = ""
+            ttft = 0.0
+            elapsed = 0.0
+            # Keep this as an httpx.Headers (or dict substitute) to
+            # preserve case-insensitive get() — dict(r.headers)
+            # lowercases keys which breaks X-Sieve-* lookups.
+            response_headers = httpx.Headers({})
+            try:
+                if stream:
+                    req = client.build_request(
+                        "POST", f"{base_url.rstrip('/')}/api/chat", json=payload,
+                    )
+                    r = client.send(req, stream=True)
+                    try:
+                        if r.status_code >= 400:
+                            upstream = _extract_upstream_message(r)
+                            raise UpstreamLLMError(
+                                status=r.status_code,
+                                url=f"{base_url.rstrip('/')}/api/chat",
+                                model=model,
+                                turn=i,
+                                phase=msg["phase"],
+                                upstream_message=upstream,
+                            )
+                        response_text, ttft = _read_streamed_response(r, t0)
+                        response_headers = r.headers
+                    finally:
+                        r.close()
+                    elapsed = time.perf_counter() - t0
+                else:
+                    r = client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
+                    elapsed = time.perf_counter() - t0
+                    if r.status_code >= 400:
+                        upstream = _extract_upstream_message(r)
+                        raise UpstreamLLMError(
+                            status=r.status_code,
+                            url=f"{base_url.rstrip('/')}/api/chat",
+                            model=model,
+                            turn=i,
+                            phase=msg["phase"],
+                            upstream_message=upstream,
+                        )
+                    data = r.json() if r.content else {}
+                    response_text = ((data.get("message") or {}).get("content") or "").strip()
+                    ttft = elapsed
+                    response_headers = r.headers
+            except UpstreamLLMError as exc:
+                errored_turns += 1
+                short = exc.upstream_message or f"HTTP {exc.status}"
+                # Keep the message short for rendering — one line.
+                short_one_line = " ".join(short.split())[:200]
+                error_text = f"{exc.status}: {short_one_line}"
+                if not first_error_msg:
+                    first_error_msg = str(exc)
+                # Synthetic elapsed if we died during the request.
+                if elapsed == 0.0:
+                    elapsed = time.perf_counter() - t0
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                errored_turns += 1
+                error_text = f"transport: {exc}"
+                if not first_error_msg:
+                    first_error_msg = f"Transport error: {exc}"
+                if elapsed == 0.0:
+                    elapsed = time.perf_counter() - t0
+
+            # Token accounting. On success we consult headers; on
+            # failure we fall back to the outgoing payload size so
+            # the cost panel doesn't understate what the agent would
+            # have charged.
+            if error_text:
+                tokens = _payload_tokens(payload)
+                inbound = tokens
+                outbound = 0  # nothing reached the LLM successfully
+                activation_phase = ""
+            elif use_sieve_headers:
+                inbound = int(response_headers.get("X-Sieve-Inbound-Tokens", "0")) or _payload_tokens(payload)
+                outbound = int(response_headers.get("X-Sieve-Outbound-Tokens", "0"))
+                activation_phase = response_headers.get("X-Sieve-Phase", "")
             else:
-                # Direct-to-LLM baseline — no Sieve headers.
                 tokens = _payload_tokens(payload)
                 inbound = tokens
                 outbound = tokens
-            activation_phase = r.headers.get("X-Sieve-Phase", "")
+                activation_phase = ""
 
             facts_after = store_fact_count()
 
-            # Grade trap / recall.
+            # Grade only when the turn produced a real response.
             absence = None
-            if msg["phase"] == "trap":
-                grader = grade_trap or (lambda _p, resp: looks_like_absence_signal(resp))
-                absence = grader(msg["content"], response_text)
-
-            # Recall grader: for retrieve/update turns. Default is the
-            # keyword heuristic; LLM-based grader is injected by the CLI.
-            if grade_recall is not None:
-                # Hint is a short description of the expected answer,
-                # built from RECALL_EXPECTATIONS when available.
-                hint = " / ".join(RECALL_EXPECTATIONS.get(i, ()))
-                correct = grade_recall(i, msg["content"], response_text, hint)
-            else:
-                correct = response_recalls(i, response_text)
+            correct = None
+            if not error_text:
+                if msg["phase"] == "trap":
+                    grader = grade_trap or (lambda _p, resp: looks_like_absence_signal(resp))
+                    absence = grader(msg["content"], response_text)
+                if grade_recall is not None:
+                    hint = " / ".join(RECALL_EXPECTATIONS.get(i, ()))
+                    correct = grade_recall(i, msg["content"], response_text, hint)
+                else:
+                    correct = response_recalls(i, response_text)
 
             results.append(TurnResult(
                 index=i,
                 phase=msg["phase"],
                 prompt=msg["content"],
-                response=response_text,
+                response=response_text or f"(upstream error: {error_text})",
                 inbound_tokens=inbound,
                 outbound_tokens=outbound,
                 facts_before=facts_before,
@@ -439,12 +622,15 @@ def run_benchmark(
                 absence_signal=absence,
                 correct_recall=correct,
                 activation_phase=activation_phase,
+                error=error_text,
             ))
 
-            # Append this turn to history for the NEXT request. Real
-            # agents do this; it's what drives baseline bloat.
+            # Append to history only on success — otherwise the next
+            # turn sees the "(upstream error: ...)" placeholder as if
+            # it were an assistant reply, which muddies subsequent
+            # recalls.
             history.append({"role": "user", "content": msg["content"]})
-            if response_text:
+            if response_text and not error_text:
                 history.append({"role": "assistant", "content": response_text})
 
     total_inbound = sum(t.inbound_tokens for t in results)
@@ -465,6 +651,8 @@ def run_benchmark(
         gradable_recalls=len(gradable),
         trap_absence_signal=trap_signal,
         turns=results,
+        errored_turns=errored_turns,
+        first_error=first_error_msg,
     )
 
 
@@ -575,6 +763,29 @@ class AggregatedCompareSummary:
     # baseline inbound approaches or exceeds a known local-model
     # ceiling; surfaced in the report's methodology section.
     baseline_truncation_observed: bool = False
+
+    @property
+    def baseline_errored_turns(self) -> int:
+        """Total errored turns across all baseline passes."""
+        return sum(r.baseline.errored_turns for r in self.runs)
+
+    @property
+    def sieve_errored_turns(self) -> int:
+        return sum(r.sieve.errored_turns for r in self.runs)
+
+    @property
+    def any_errors(self) -> bool:
+        return self.baseline_errored_turns > 0 or self.sieve_errored_turns > 0
+
+    @property
+    def first_error(self) -> str:
+        """First error message seen across any run, if any."""
+        for r in self.runs:
+            if r.baseline.first_error:
+                return r.baseline.first_error
+            if r.sieve.first_error:
+                return r.sieve.first_error
+        return ""
 
     @property
     def most_recent(self) -> CompareSummary:
@@ -859,6 +1070,28 @@ def _avg(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def _error_hint(msg: str) -> str:
+    """Return a short actionable hint based on a freeform error string."""
+    m = (msg or "").lower()
+    if not m:
+        return ""
+    if "context" in m and ("exceed" in m or "length" in m or "too large" in m or "overflow" in m):
+        return (
+            "Payload larger than model's context window. Try "
+            "--fixture small/medium, or raise num_ctx via a Modelfile."
+        )
+    if "out of memory" in m or "cuda" in m or "oom" in m:
+        return (
+            "Model + context exceeded VRAM. Smaller model / fixture, or "
+            "`ollama stop <other>` to free GPU."
+        )
+    if "not found" in m or "does not exist" in m:
+        return "Model unavailable — run `ollama pull <model>` and retry."
+    if "connection" in m or "refused" in m:
+        return "Endpoint unreachable — check the LLM server is running."
+    return ""
+
+
 def build_headline(
     *,
     aggregated: "AggregatedCompareSummary | None" = None,
@@ -1078,10 +1311,11 @@ def render_compare_summary(
     resp_table = Table(
         title="Model responses (selected turns)", show_lines=True,
     )
+    # Column widths sum to <= 114 (content) + 6 (borders/padding) = 120.
     resp_table.add_column("#", justify="right", style="dim", width=3)
-    resp_table.add_column("Question", max_width=30)
-    resp_table.add_column("Baseline (no Sieve)", max_width=50)
-    resp_table.add_column("With Sieve", max_width=50)
+    resp_table.add_column("Question", max_width=24, overflow="fold")
+    resp_table.add_column("Baseline (no Sieve)", max_width=42, overflow="fold")
+    resp_table.add_column("With Sieve", max_width=42, overflow="fold")
     rows_added = 0
     for idx in illustrative_indices:
         b = next((t for t in summary.baseline.turns if t.index == idx), None)
@@ -1333,6 +1567,37 @@ def render_aggregated_compare_summary(
             )
         )
 
+    # ── Errors encountered — upfront, not buried ─────────────────
+    if agg.any_errors:
+        total_turns = len(agg.runs) * len(agg.runs[0].sieve.turns) if agg.runs else 0
+        err_lines = []
+        if agg.baseline_errored_turns:
+            err_lines.append(
+                f"• [yellow]Baseline:[/] {agg.baseline_errored_turns} / "
+                f"{total_turns} turns errored"
+            )
+        if agg.sieve_errored_turns:
+            err_lines.append(
+                f"• [yellow]Sieve:[/] {agg.sieve_errored_turns} / "
+                f"{total_turns} turns errored"
+            )
+        if agg.first_error:
+            # One-line version of the first error so the panel stays
+            # compact; the full message lives in the markdown report.
+            first = " ".join(agg.first_error.split())[:200]
+            err_lines.append(f"\n[dim]First error:[/] {first}")
+            # Actionable hint derived from the error text.
+            hint = _error_hint(agg.first_error)
+            if hint:
+                err_lines.append(f"[dim]Hint:[/] {hint}")
+        console.print(
+            Panel(
+                "\n".join(err_lines),
+                title="⚠  Errors encountered",
+                border_style="yellow",
+            )
+        )
+
     # ── Trade-offs — named explicitly to inoculate against rebuttal ──
     sieve_wall = agg.sieve_wall_clock_s.mean
     base_wall = agg.baseline_wall_clock_s.mean
@@ -1430,7 +1695,10 @@ def render_aggregated_compare_summary(
     headline = build_headline(
         aggregated=agg, pricing_tier=pricing_tier, model=model, fixture=fixture,
     )
-    sep = "─" * min(console.width if hasattr(console, "width") else 80, 80)
+    # Match the current console width (capped at 120 elsewhere) so the
+    # separator rule lines up with the panels above it.
+    _cw = console.width if hasattr(console, "width") else 100
+    sep = "─" * min(_cw, 120)
     console.print()
     console.print(f"[dim]{sep}[/]")
     console.print(f"[bold]{headline}[/]")
@@ -1674,6 +1942,31 @@ def render_aggregated_markdown(
         f"| Facts learned (Sieve) | — | {facts_cell} | — |"
     )
     lines.append("")
+
+    # ── Errors encountered — upfront ───────────────────────────────
+    if agg.any_errors:
+        total = len(agg.runs) * len(agg.runs[0].sieve.turns) if agg.runs else 0
+        lines.append("## ⚠ Errors encountered")
+        lines.append("")
+        if agg.baseline_errored_turns:
+            lines.append(
+                f"- **Baseline:** {agg.baseline_errored_turns} / {total} "
+                "turns errored (turn-level partial data shown below)"
+            )
+        if agg.sieve_errored_turns:
+            lines.append(
+                f"- **Sieve:** {agg.sieve_errored_turns} / {total} turns errored"
+            )
+        if agg.first_error:
+            lines.append("")
+            lines.append("```")
+            lines.append(agg.first_error[:1000])
+            lines.append("```")
+            hint = _error_hint(agg.first_error)
+            if hint:
+                lines.append("")
+                lines.append(f"> **Hint:** {hint}")
+        lines.append("")
 
     # ── Cost panel ─────────────────────────────────────────────────
     if price_for(pricing_tier) > 0 and saved_mean > 0:
