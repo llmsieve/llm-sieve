@@ -326,6 +326,7 @@ def _run_quick_install(console):
         _pause_for_enter(console)
         return BACK
     _render_post_install_status(console)
+    _offer_to_start_service(console)
     _pause_for_enter(console)
     # Rebuild the top screen from a fresh install state — otherwise
     # the user navigates back to a stale "Install everything's
@@ -422,10 +423,51 @@ def _run_guided_install(console):
         )
 
     _render_post_install_status(console)
+    _offer_to_start_service(console)
     _pause_for_enter(console)
     # Reset to a fresh top screen so the newly-installed state is
     # reflected. See the comment on the quick-install path.
     return ResetTo(build_top_screen(console))
+
+
+def _offer_to_start_service(console) -> None:
+    """After a fresh install, ask if the user wants the proxy running now.
+
+    Default Yes — the user just installed Sieve, so starting the
+    proxy is almost always what they want. Skipping still leaves
+    them with a clearly-reachable Service → Start option in the
+    top menu.
+
+    If the service is ALREADY running (edge case: reinstall without
+    a prior stop), we print a note and skip the prompt.
+    """
+    from sieve.cli import _read_pid
+    if _read_pid() is not None:
+        console.print(
+            "\n[dim]Sieve is already running; no need to start.[/]"
+        )
+        return
+    console.print()
+    start_now = click.confirm(
+        "Start the Sieve proxy now?",
+        default=True,
+    )
+    if not start_now:
+        console.print(
+            "[dim]You can start it later from "
+            "Service → Start, or with `sieve start`.[/]"
+        )
+        return
+    from sieve.cli import start as start_cmd
+    try:
+        start_cmd.main(standalone_mode=False, args=[])
+    except (SystemExit, click.exceptions.Exit):
+        pass
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[red]Start failed:[/] {exc}\n"
+            "[dim]You can retry from Service → Start.[/]"
+        )
 
 
 def _render_post_install_status(console) -> None:

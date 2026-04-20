@@ -288,6 +288,76 @@ def test_uninstall_handler_exits_wizard_on_success(tmp_path, monkeypatch):
     )
 
 
+def test_offer_to_start_service_skipped_when_already_running(monkeypatch):
+    """No point asking if Sieve is already up — just note it and skip."""
+    from sieve import _wizard_app
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: 4242)
+    # click.confirm must NOT be called in this branch.
+    import click as _click
+    called = {"confirm": False, "start": False}
+    def _confirm(*a, **k):
+        called["confirm"] = True
+        return True
+    monkeypatch.setattr(_click, "confirm", _confirm)
+    import sieve.cli
+    class _FakeStart:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            called["start"] = True
+    monkeypatch.setattr(sieve.cli, "start", _FakeStart)
+
+    console, _ = _console()
+    _wizard_app._offer_to_start_service(console)
+    assert called["confirm"] is False
+    assert called["start"] is False
+
+
+def test_offer_to_start_service_defaults_yes(monkeypatch):
+    """Pressing enter at the prompt should start the service — a
+    fresh-install user almost always wants it running."""
+    from sieve import _wizard_app
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
+    import click as _click
+    captured_confirm_kwargs = {}
+    def _confirm(q, default=False):
+        captured_confirm_kwargs["default"] = default
+        return default  # simulate pressing enter
+    monkeypatch.setattr(_click, "confirm", _confirm)
+    import sieve.cli
+    start_calls = []
+    class _FakeStart:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            start_calls.append(1)
+    monkeypatch.setattr(sieve.cli, "start", _FakeStart)
+
+    console, _ = _console()
+    _wizard_app._offer_to_start_service(console)
+    assert captured_confirm_kwargs["default"] is True, (
+        "Prompt must default to Yes — users installed Sieve to use it"
+    )
+    assert start_calls == [1]
+
+
+def test_offer_to_start_service_respects_no(monkeypatch):
+    """If the user explicitly says no, we must NOT start the service."""
+    from sieve import _wizard_app
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
+    import click as _click
+    monkeypatch.setattr(_click, "confirm", lambda *a, **k: False)
+    import sieve.cli
+    started = []
+    class _FakeStart:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            started.append(1)
+    monkeypatch.setattr(sieve.cli, "start", _FakeStart)
+
+    console, _ = _console()
+    _wizard_app._offer_to_start_service(console)
+    assert started == []
+
+
 def test_install_to_uninstall_round_trip_via_MenuApp(tmp_path, monkeypatch):
     """End-to-end: stale top → Install → ResetTo fresh top (Reinstall
     label, all opts enabled) → Uninstall → QUIT exits. Guards against
@@ -308,6 +378,13 @@ def test_install_to_uninstall_round_trip_via_MenuApp(tmp_path, monkeypatch):
             (sieve_dir / "sieve.yaml").write_text("listen:\n  port: 11435\n")
     import sieve.cli
     monkeypatch.setattr(sieve.cli, "init", _FakeInit)
+    # The offer-to-start prompt will try `sieve start` after install;
+    # stub it so we don't spawn a real daemon from the test suite.
+    class _FakeStart:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            pass
+    monkeypatch.setattr(sieve.cli, "start", _FakeStart)
     monkeypatch.setattr(_wizard_app, "_render_post_install_status", lambda c: None)
     monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
     monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
@@ -366,6 +443,12 @@ def test_quick_install_returns_ResetTo_so_stack_refreshes(tmp_path, monkeypatch)
     monkeypatch.setattr(sieve.cli, "init", _FakeInit)
     monkeypatch.setattr(_wizard_app, "_render_post_install_status", lambda c: None)
     monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
+    # Post-install offer-to-start: pretend service isn't running so
+    # the branch fires. Decline the prompt to avoid needing to stub
+    # `sieve.cli.start` (the offer branches are tested separately).
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
+    import click as _click
+    monkeypatch.setattr(_click, "confirm", lambda *a, **k: False)
 
     console, _ = _console()
     result = _wizard_app._run_quick_install(console)
