@@ -372,27 +372,53 @@ class MemoryStore:
         return garbage. The safe action is to stop cold so the operator
         either sterilises the store or switches the provider back.
 
-        Note: this raises only when facts with embeddings already exist.
-        Empty stores (fresh sterilised, pre-seed) are fine at any
-        configured dimension.
+        Checks both stored-vector bytes and the vec_facts DDL. The DDL
+        check catches fresh stores that were initialised at the wrong
+        dim (e.g. wizard built the schema before the FastEmbed override
+        was applied) — those stores are empty, so the row-based check
+        passes, but every subsequent write fails with a dimension
+        mismatch against the vec0 virtual table.
         """
+        configured_dim = self.config.embedding_dimensions
+
+        # Row-based check — catches drift after data was written.
         try:
             row = self.conn.execute(
                 "SELECT embedding FROM facts WHERE embedding IS NOT NULL LIMIT 1"
             ).fetchone()
         except Exception:
-            return  # table may not exist yet
-        if not row or not row[0]:
+            row = None
+        if row and row[0]:
+            stored_dim = len(row[0]) // 4  # float32 = 4 bytes each
+            if stored_dim != configured_dim:
+                raise EmbeddingDimensionMismatchError(
+                    stored_dim=stored_dim,
+                    configured_dim=configured_dim,
+                    store_path=str(self.db_path),
+                )
+
+        # DDL-based check — catches empty stores with a mismatched
+        # vec_facts schema. Parses "embedding float[N]" out of the
+        # CREATE VIRTUAL TABLE statement.
+        try:
+            ddl_row = self.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'vec_facts'"
+            ).fetchone()
+        except Exception:
             return
-        stored_dim = len(row[0]) // 4  # float32 = 4 bytes each
-        configured_dim = self.config.embedding_dimensions
-        if stored_dim == configured_dim:
+        if not ddl_row or not ddl_row[0]:
             return
-        raise EmbeddingDimensionMismatchError(
-            stored_dim=stored_dim,
-            configured_dim=configured_dim,
-            store_path=str(self.db_path),
-        )
+        import re
+        m = re.search(r"embedding\s+float\[(\d+)\]", ddl_row[0], re.IGNORECASE)
+        if not m:
+            return
+        schema_dim = int(m.group(1))
+        if schema_dim != configured_dim:
+            raise EmbeddingDimensionMismatchError(
+                stored_dim=schema_dim,
+                configured_dim=configured_dim,
+                store_path=str(self.db_path),
+            )
 
     # --- Facts CRUD ---
 

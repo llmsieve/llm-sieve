@@ -1113,9 +1113,13 @@ def _run_wizard_flow() -> None:
     apply_wizard_answers(answers)
 
     # Initialise the encrypted store at the chosen location.
+    # Load the just-written YAML through RecallConfig so the resolved
+    # store.embedding_dimensions (384 under FastEmbed, 768 under Ollama)
+    # reaches init_schema. A bare StoreConfig(path=...) would fall back
+    # to the legacy 768 default and bake a mismatched vec_facts schema.
     from sieve.store import MemoryStore
-    from sieve.config import StoreConfig
-    ms = MemoryStore(StoreConfig(path=str(answers.store_path)))
+    cfg = RecallConfig.load()
+    ms = MemoryStore(cfg.store)
     if not ms.db_path.exists():
         ms.open()
         ms.init_schema()
