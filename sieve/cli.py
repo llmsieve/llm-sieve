@@ -1706,7 +1706,7 @@ def benchmark(
     # Skipped silently on non-Ollama endpoints (OpenAI etc. 404).
     cwin_precise_text: str | None = None
     from sieve._wizard_helpers import model_context_window
-    from sieve._agent_fixture import fixture_approx_tokens
+    from sieve._agent_fixture import fixture_approx_tokens, fixture_names
     ctx = model_context_window(direct_base, model_name)
     if ctx is not None:
         effective_ctx, architectural_ctx = ctx
@@ -1715,70 +1715,157 @@ def benchmark(
         # multiplier matches what real fixtures produce in practice
         # (measured on medium, large, xlarge).
         fixture_peak = int(fixture_approx_tokens(fixture) * 1.8)
-        if fixture_peak > effective_ctx:
-            # Suggested Modelfile num_ctx: enough to cover the fixture
-            # peak with headroom, rounded up to the nearest power of 2,
-            # but never exceeding the model's architectural ceiling.
+        sieve_fits = effective_ctx >= _SIEVE_TYPICAL_OVERHEAD_TOKENS
+        baseline_fits = effective_ctx >= fixture_peak
+
+        # Three tiers:
+        #   1. Both fit   → silent. No warning needed.
+        #   2. Only Sieve → "Context configuration" panel, default Y.
+        #                   This IS the Sieve story; baseline failures
+        #                   are part of the finding.
+        #   3. Neither    → loud warning, default N. Rare: only if the
+        #                   effective window is smaller than Sieve's own
+        #                   ~2K overhead, e.g. a 1K-context model.
+        if not baseline_fits:
+            # Build shared ingredients used by both (2) and (3) panels.
             target = fixture_peak * 2
             rounded = 1
             while rounded < target:
                 rounded *= 2
             suggested_ctx = min(rounded, architectural_ctx)
-            # Pick the next-smaller fixture for the "[b]" option.
-            from sieve._agent_fixture import fixture_names
             order = fixture_names()
             idx = order.index(fixture) if fixture in order else 1
             smaller_fixture = order[max(0, idx - 1)] if idx > 0 else fixture
-            arch_note = (
-                f" (architectural max: {architectural_ctx:,})"
-                if architectural_ctx > effective_ctx else ""
-            )
-            msg = (
-                f"Model '{model_name}' is running with effective "
-                f"num_ctx={effective_ctx:,}{arch_note}, but fixture "
-                f"'{fixture}' ships ~{fixture_peak:,} tokens/turn at "
-                f"peak (turn {turns}).\n"
-                f"Baseline will error or truncate mid-run.\n\n"
-                f"Options:\n"
-                f"  [a] Continue anyway — baseline errors will be logged "
-                f"in the report\n"
-                f"  [b] Drop to a smaller fixture "
-                f"(e.g. --fixture {smaller_fixture})\n"
-                f"  [c] Raise num_ctx with a Modelfile:\n"
-                f"       ollama show {model_name} --modelfile > Modelfile\n"
-                f"       # add line: PARAMETER num_ctx {suggested_ctx}\n"
-                f"       ollama create {model_name}-ctx{suggested_ctx} -f Modelfile\n"
-                f"       then re-run with --model {model_name}-ctx{suggested_ctx}"
-            )
-            if no_input:
-                cwin_precise_text = (
-                    f"model effective num_ctx={effective_ctx:,} < fixture "
-                    f"peak ~{fixture_peak:,}; --no-input so continued; "
-                    "errors expected in baseline pass."
+
+            if sieve_fits:
+                # ── Tier 2: the Sieve story ────────────────────────
+                msg = (
+                    f"Your model is serving [cyan]{effective_ctx:,}[/] "
+                    f"tokens of context (the Ollama default for models "
+                    f"without a Modelfile [cyan]num_ctx[/] setting). "
+                    f"The '{fixture}' agent fixture ships "
+                    f"[cyan]~{fixture_peak:,}[/] tokens/turn at peak.\n\n"
+                    f"What this means for the benchmark:\n"
+                    f"  → [dim]Without Sieve[/]: the raw agent payload "
+                    f"exceeds the context window. Baseline requests "
+                    f"will error. That result is itself a finding — "
+                    f"the benchmark records it as 'baseline: N/"
+                    f"{turns} turns errored'.\n"
+                    f"  → [dim]With Sieve[/]: Sieve forwards "
+                    f"~{_SIEVE_TYPICAL_OVERHEAD_TOKENS:,} tokens/turn "
+                    f"regardless of agent size — [green]well inside[/] "
+                    f"the window. The Sieve pass should complete "
+                    f"normally.\n\n"
+                    f"This is exactly the scenario Sieve is designed "
+                    f"for. Three choices:\n"
+                    f"  [bold][1][/] [green]Run it.[/] Baseline will "
+                    f"fail as expected; Sieve will succeed. The "
+                    f"contrast is the point. [dim](recommended)[/]\n"
+                    f"  [2] Let the baseline compete fairly by raising "
+                    f"num_ctx on the model:\n"
+                    f"      [dim]ollama show {model_name} --modelfile > Modelfile[/]\n"
+                    f"      [dim]# add line: PARAMETER num_ctx {suggested_ctx}[/]\n"
+                    f"      [dim]ollama create {model_name}-ctx{suggested_ctx} -f Modelfile[/]\n"
+                    f"      [dim]then re-run with --model {model_name}-ctx{suggested_ctx}[/]\n"
+                    f"  [3] Run a same-context comparison with a smaller "
+                    f"fixture ([cyan]--fixture {smaller_fixture}[/])"
                 )
-                console.print()
-                console.print(Panel_lite_warning(msg))
-                console.print(
-                    "[dim](--no-input set — continuing with known context "
-                    "overflow. Errors will be surfaced in the report.)[/]"
-                )
-            else:
-                console.print()
-                console.print(Panel_lite_warning(msg))
-                go = click.confirm(
-                    "Continue anyway (option [a])?",
-                    default=False,
-                )
-                if not go:
-                    console.print(
-                        "[yellow]Cancelled. Re-run with a smaller --fixture "
-                        "or a model with a larger effective context window.[/]"
+                if no_input:
+                    cwin_precise_text = (
+                        f"effective num_ctx={effective_ctx:,} < fixture peak "
+                        f"~{fixture_peak:,}; baseline expected to fail, "
+                        "Sieve expected to succeed (the Sieve story)."
                     )
-                    sys.exit(0)
-                cwin_precise_text = (
-                    f"User continued with effective num_ctx={effective_ctx:,} "
-                    f"< fixture peak ~{fixture_peak:,}; expect baseline errors."
+                    console.print()
+                    console.print(
+                        Panel_lite_warning(
+                            msg,
+                            title="Context configuration",
+                            border_style="cyan",
+                        )
+                    )
+                    console.print(
+                        "[dim](--no-input set — running the benchmark.)[/]"
+                    )
+                else:
+                    console.print()
+                    console.print(
+                        Panel_lite_warning(
+                            msg,
+                            title="Context configuration",
+                            border_style="cyan",
+                        )
+                    )
+                    go = click.confirm(
+                        "Proceed with [1] Run it?",
+                        default=True,  # Y by default — this is the common case.
+                    )
+                    if not go:
+                        console.print(
+                            "[yellow]Cancelled. Pick option [2] to raise "
+                            "num_ctx, or re-run with [cyan]--fixture "
+                            f"{smaller_fixture}[/][yellow] for option [3]."
+                            "[/]"
+                        )
+                        sys.exit(0)
+                    cwin_precise_text = (
+                        f"effective num_ctx={effective_ctx:,} < fixture peak "
+                        f"~{fixture_peak:,}; baseline expected to fail, "
+                        "Sieve expected to succeed."
+                    )
+            else:
+                # ── Tier 3: even Sieve won't fit ──────────────────
+                msg = (
+                    f"Model '{model_name}' is running with effective "
+                    f"num_ctx=[red]{effective_ctx:,}[/] — smaller than "
+                    f"Sieve's typical outbound "
+                    f"(~{_SIEVE_TYPICAL_OVERHEAD_TOKENS:,} tokens).\n\n"
+                    f"Both the baseline AND the Sieve pass are likely "
+                    f"to error on this combination. This is unusual — "
+                    f"Ollama's default (4096) already fits Sieve's "
+                    f"output, so seeing a lower number probably means "
+                    f"a Modelfile has [cyan]PARAMETER num_ctx[/] set "
+                    f"unusually low.\n\n"
+                    f"Options:\n"
+                    f"  [1] Raise num_ctx on the model "
+                    f"(recommended):\n"
+                    f"      [dim]ollama show {model_name} --modelfile > Modelfile[/]\n"
+                    f"      [dim]# replace: PARAMETER num_ctx {suggested_ctx}[/]\n"
+                    f"      [dim]ollama create {model_name}-ctx{suggested_ctx} -f Modelfile[/]\n"
+                    f"  [2] Cancel and pick a model with a larger "
+                    f"effective context window.\n"
+                    f"  [3] Continue anyway (expect both passes to fail)."
                 )
+                if no_input:
+                    cwin_precise_text = (
+                        f"effective num_ctx={effective_ctx:,} < Sieve's "
+                        f"typical outbound ~{_SIEVE_TYPICAL_OVERHEAD_TOKENS:,}; "
+                        "both passes likely to fail; --no-input continued."
+                    )
+                    console.print()
+                    console.print(Panel_lite_warning(msg))
+                    console.print(
+                        "[dim](--no-input set — continuing despite "
+                        "likely failure of BOTH passes.)[/]"
+                    )
+                else:
+                    console.print()
+                    console.print(Panel_lite_warning(msg))
+                    go = click.confirm(
+                        "Continue anyway? Both passes are expected to fail.",
+                        default=False,  # N by default — rare/risky case.
+                    )
+                    if not go:
+                        console.print(
+                            "[yellow]Cancelled. Raise num_ctx or switch "
+                            "models, then re-run.[/]"
+                        )
+                        sys.exit(0)
+                    cwin_precise_text = (
+                        f"effective num_ctx={effective_ctx:,} below Sieve's "
+                        f"typical outbound ~{_SIEVE_TYPICAL_OVERHEAD_TOKENS:,}; "
+                        "both passes expected to fail."
+                    )
 
     # Merge the precise and heuristic warnings into one bullet so
     # the report's limitations section records everything that
@@ -1891,10 +1978,27 @@ def benchmark(
         sys.exit(1)
 
 
-def Panel_lite_warning(text: str):
+# Rough upper bound of what the Sieve proxy forwards to the LLM per
+# turn, regardless of incoming agent payload size. Breakdown:
+#   ~200   lean system prompt
+#   ~100   recall tool schema
+#   ~500   retrieved-context injection (mature store)
+#   ~600   last-N conversation history (observe_turns=8)
+#   ~100   current user message + rendering overhead
+#   ~500   headroom for rare long retrievals
+# Hardcoded rather than measured: measuring requires a live sandbox
+# before the preflight, which inverts the dependency order and adds
+# 8-12s of cold-start latency to the wizard. A 2K ceiling that hasn't
+# been observed to regress in production is worth more than a
+# measured 1.7K that might hide future drift.
+_SIEVE_TYPICAL_OVERHEAD_TOKENS = 2048
+
+
+def Panel_lite_warning(text: str, *, title: str = "⚠  Context-window warning",
+                      border_style: str = "yellow"):
     """Inline Panel factory — imports lazily to avoid a global rich dep."""
     from rich.panel import Panel
-    return Panel(text, title="⚠  Context-window warning", border_style="yellow")
+    return Panel(text, title=title, border_style=border_style)
 
 
 class _WrapAdapter:
