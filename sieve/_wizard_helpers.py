@@ -119,13 +119,23 @@ def model_context_window(
     return effective, architectural
 
 
-def list_models(base_url: str, timeout: float = 4.0) -> list[str]:
+def list_models(
+    base_url: str,
+    timeout: float = 4.0,
+    api_key: str | None = None,
+) -> list[str]:
     """Return the model names exposed by an LLM endpoint.
 
     Tries Ollama's ``/api/tags`` first (common case for local users),
-    then OpenAI's ``/v1/models`` as a fallback. Returns an empty list
-    on any failure — the caller is expected to fall back to a
-    free-text prompt so the user can enter a model name manually.
+    then OpenAI's ``/v1/models`` (with optional Bearer auth) as a
+    fallback. Returns an empty list on any failure — the caller is
+    expected to fall back to a free-text prompt so the user can enter
+    a model name manually.
+
+    ``api_key`` is passed as ``Authorization: Bearer <key>`` on the
+    ``/v1/models`` request. Anthropic + OpenAI + vLLM + LM Studio +
+    Groq all accept this shape, so a single call covers every cloud
+    endpoint we support.
 
     Model names are de-duplicated and sorted case-insensitively for a
     stable menu ordering.
@@ -140,8 +150,13 @@ def list_models(base_url: str, timeout: float = 4.0) -> list[str]:
     except Exception:
         names = []
     if not names:
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         try:
-            r = httpx.get(f"{base}/v1/models", timeout=timeout)
+            r = httpx.get(
+                f"{base}/v1/models", headers=headers, timeout=timeout,
+            )
             if r.status_code == 200:
                 data = r.json() or {}
                 items = data.get("data", data) or []
@@ -258,6 +273,7 @@ def pick_model(
     default: str | None = None,
     console=None,
     exclude: list[str] | None = None,
+    api_key: str | None = None,
 ) -> str:
     """Pick a model from the live endpoint, with a free-text escape.
 
@@ -270,12 +286,16 @@ def pick_model(
     grader picker to keep the "pick a different model" suggestion
     meaningful (a user who's got qwen3.5:9b as test model shouldn't
     see qwen3.5:9b as the top grader option).
+
+    ``api_key`` is forwarded to list_models so cloud endpoints
+    (Claude/OpenAI/vLLM/etc.) can return their actual model list
+    instead of 401'ing silently into the "could not list" fallback.
     """
     if console is None:
         from rich.console import Console
         console = Console()
 
-    names = list_models(base_url)
+    names = list_models(base_url, api_key=api_key)
     if exclude:
         ex = set(exclude)
         names = [n for n in names if n not in ex]

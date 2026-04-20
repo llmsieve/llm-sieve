@@ -49,6 +49,7 @@ docs = [
 
 [project.scripts]
 sieve = "sieve.cli:main"
+sieve-install = "sieve._installer:main"
 
 [project.urls]
 Homepage = "https://llmsieve.com"

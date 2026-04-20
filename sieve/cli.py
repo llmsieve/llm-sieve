@@ -68,6 +68,24 @@ def cli(ctx: click.Context):
     #     prompt nobody can see.
     if ctx.invoked_subcommand is None:
         if sys.stdin.isatty():
+            # If no install yet, skip straight to the first-run
+            # installer. Users who pip-installed and run `sieve`
+            # should land in the setup experience, not a menu full
+            # of disabled options.
+            from pathlib import Path as _P
+            yaml_path = _P("~/.sieve/sieve.yaml").expanduser()
+            if not yaml_path.exists():
+                console.print(
+                    "[bold]No Sieve configuration found.[/] "
+                    "Launching the first-run installer.\n"
+                    "[dim](You can also run [cyan]sieve-install[/] directly.)[/]\n"
+                )
+                from sieve._installer import main as installer_main
+                try:
+                    installer_main.main(standalone_mode=False, args=[])
+                except (SystemExit, click.exceptions.Exit):
+                    pass
+                return
             from sieve._wizard_app import run_wizard
             run_wizard(console=console)
         else:
