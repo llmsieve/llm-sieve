@@ -1310,44 +1310,117 @@ store:
     help="Maximum seconds to wait for the writer per turn (when "
     "--wait-for-write is enabled). Falls through after this.",
 )
-def demo(wait_for_write: bool, max_wait: float):
-    """Run a short scripted demo against a running Sieve proxy."""
-    pid = _read_pid()
-    if pid is None:
-        console.print(
-            "[bold red]Sieve is not running.[/] Start it in another terminal with [cyan]sieve start[/]."
-        )
-        sys.exit(1)
+@click.option(
+    "--use-main-store",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run against the user's main proxy and store instead of an "
+        "ephemeral sandbox. Advanced/debug use only — a demo run adds "
+        "Casey/Mabel facts to the live store. Requires `sieve start`."
+    ),
+)
+def demo(wait_for_write: bool, max_wait: float, use_main_store: bool):
+    """Run a short scripted demo.
 
-    import httpx
-    import time
-
+    By default spins up an isolated sandbox proxy with a scratch store,
+    runs the demo against it, then tears everything down — the user's
+    real proxy and store are never touched. Pass ``--use-main-store``
+    to run against the live install (advanced/debug only).
+    """
     try:
         config = RecallConfig.load()
     except Exception as exc:
         console.print(f"[bold red]Config error:[/] {exc}")
         sys.exit(1)
 
-    base = f"http://127.0.0.1:{config.listen.port}"
-
-    # Open the store read-only so we can poll fact counts between turns.
-    # `sieve demo` assumes the proxy is already running against this store,
-    # so both readers can share the DB file safely.
-    from sieve.store import MemoryStore
-    ms: MemoryStore | None = None
-    if wait_for_write:
+    if use_main_store:
+        pid = _read_pid()
+        if pid is None:
+            console.print(
+                "[bold red]Sieve is not running.[/] --use-main-store "
+                "requires [cyan]sieve start[/] in another terminal."
+            )
+            sys.exit(1)
+        from sieve.store import MemoryStore
+        ms: "MemoryStore | None" = None
+        if wait_for_write:
+            try:
+                ms = MemoryStore(config.store)
+                ms.open()
+            except Exception as exc:
+                console.print(f"[dim]store poll disabled ({exc})[/]")
+                ms = None
+        base = f"http://127.0.0.1:{config.listen.port}"
         try:
-            ms = MemoryStore(config.store)
-            ms.open()
-        except Exception as exc:
-            console.print(f"[dim]store poll disabled ({exc})[/]")
+            _run_demo_loop(
+                base_url=base,
+                model=config.provider.default_model,
+                store=ms,
+                wait_for_write=wait_for_write,
+                max_wait=max_wait,
+            )
+        finally:
+            if ms is not None:
+                ms.close()
+        return
+
+    # Sandbox path — the default.
+    from sieve._sandbox import SandboxedProxy
+    from sieve.store import MemoryStore
+
+    console.print(
+        "[dim]Starting sandbox proxy (isolated from your main store)…[/]"
+    )
+    try:
+        with SandboxedProxy.from_main_config(config) as sb:
+            console.print(
+                f"[dim]Sandbox ready at [cyan]{sb.base_url}[/]\n[/]"
+            )
             ms = None
+            if wait_for_write:
+                try:
+                    ms = MemoryStore(sb.config.store)
+                    ms.open()
+                except Exception as exc:
+                    console.print(f"[dim]store poll disabled ({exc})[/]")
+                    ms = None
+            try:
+                _run_demo_loop(
+                    base_url=sb.base_url,
+                    model=sb.config.provider.default_model,
+                    store=ms,
+                    wait_for_write=wait_for_write,
+                    max_wait=max_wait,
+                )
+            finally:
+                if ms is not None:
+                    ms.close()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Demo interrupted — sandbox cleaned up.[/]")
+        sys.exit(130)
+    except Exception as exc:
+        console.print(f"[bold red]Demo failed:[/] {exc}")
+        sys.exit(1)
+
+
+def _run_demo_loop(
+    *,
+    base_url: str,
+    model: str,
+    store,
+    wait_for_write: bool,
+    max_wait: float,
+) -> None:
+    """Run the 6-message demo against a live proxy + optional store reader."""
+    import httpx
+    import time
 
     def fact_count() -> int:
-        if ms is None:
+        if store is None:
             return 0
         try:
-            return int(ms.stats().get("facts_count", 0))
+            return int(store.stats().get("facts_count", 0))
         except Exception:
             return 0
 
@@ -1359,9 +1432,6 @@ def demo(wait_for_write: bool, max_wait: float):
         "What breed is Mabel?",
         "Do you remember where Pat works?",  # absence-signal trap
     ]
-
-    # Phases 1–3 add new facts; 4–5 query existing facts; 6 is the trap.
-    # Only wait for the writer after phases that should produce new facts.
     expect_new_fact = [True, True, True, False, False, False]
 
     console.print("[bold]Sieve demo[/] — 6 messages through the proxy:\n")
@@ -1369,17 +1439,15 @@ def demo(wait_for_write: bool, max_wait: float):
         before = fact_count()
         console.print(f"[dim]turn {i}:[/] [cyan]{msg}[/]")
         payload = {
-            "model": config.provider.default_model,
+            "model": model,
             "messages": [{"role": "user", "content": msg}],
             "stream": False,
         }
         try:
-            r = httpx.post(f"{base}/api/chat", json=payload, timeout=60.0)
+            r = httpx.post(f"{base_url}/api/chat", json=payload, timeout=60.0)
             r.raise_for_status()
             data = r.json()
             raw = (data.get("message") or {}).get("content", "") or ""
-            # qwen3 emits reasoning inside <think>…</think>; strip for display
-            # so an all-reasoning turn doesn't render as an empty line.
             if "<think>" in raw and "</think>" in raw:
                 import re
                 raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
@@ -1396,22 +1464,11 @@ def demo(wait_for_write: bool, max_wait: float):
         except Exception as exc:
             console.print(f"        [red]error:[/] {exc}")
 
-        # Wait for the async writer to commit before the next turn so
-        # later retrievals see the fact. Only waits on turns that should
-        # produce new facts; queries (turns 4–6) run back-to-back.
-        # The proxy awaits the writer inline during OBSERVE so this
-        # poll only matters on ACCUMULATE/ACTIVATE — kept in for
-        # backwards-compatible behaviour against older proxies.
-        if wait_for_write and ms is not None and expect_new_fact[i - 1] and i < len(messages):
+        if wait_for_write and store is not None and expect_new_fact[i - 1] and i < len(messages):
             deadline = time.monotonic() + max_wait
             while time.monotonic() < deadline and fact_count() <= before:
                 time.sleep(0.3)
 
-        # Fact-count telemetry — always print after any wait so the
-        # number reflects what's actually committed to the store. Warn
-        # loudly when a seeding turn failed to add any fact because
-        # that indicates the writer's extraction regex/S2 missed this
-        # message and the next retrieval query will probably fail too.
         after = fact_count()
         delta = after - before
         if expect_new_fact[i - 1]:
@@ -1426,13 +1483,6 @@ def demo(wait_for_write: bool, max_wait: float):
         else:
             console.print(f"        [dim]📝 Facts: {after}[/]")
         console.print()
-
-    if ms is not None:
-        ms.close()
-
-    console.print(
-        "[dim]Check [cyan]sieve status[/] to see how many facts Sieve learned.[/]"
-    )
 
 
 @cli.command()
@@ -1466,71 +1516,160 @@ def demo(wait_for_write: bool, max_wait: float):
     help="Output format. 'rich' for terminal, 'json' for scripting, "
     "'markdown' for paste-into-README.",
 )
+@click.option(
+    "--use-main-store",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run against the user's main proxy and store instead of an "
+        "ephemeral sandbox. Advanced/debug use only — a benchmark run "
+        "adds ~11 Sam/Alex/Luna facts to the live store, and --compare "
+        "would delete all existing facts. Requires `sieve start` first."
+    ),
+)
 def benchmark(
     config_path: str | None,
     model: str | None,
     compare: bool,
     pricing: str,
     output_format: str,
+    use_main_store: bool,
 ):
-    """Run a reproducible 15-message benchmark against the proxy.
+    """Run a reproducible 15-message benchmark.
+
+    By default spins up an isolated sandbox proxy with a scratch store,
+    runs the benchmark, and tears everything down — the user's real
+    proxy and store are never touched. Pass ``--use-main-store`` to
+    run against the live install (advanced/debug only).
 
     Default mode demonstrates memory + recall features on a bare-chat
-    baseline. Use --compare to demonstrate token reduction against a
-    realistic agent-shaped inbound payload.
-
-    Requires the proxy to be running: start it with ``sieve start`` in
-    another terminal first.
+    baseline. Use ``--compare`` to demonstrate token reduction against
+    a realistic agent-shaped inbound payload.
     """
-    pid = _read_pid()
-    if pid is None:
-        console.print(
-            "[bold red]Sieve is not running.[/] Start it in another terminal with "
-            "[cyan]sieve start[/], then re-run [cyan]sieve benchmark[/]."
-        )
-        sys.exit(1)
-
     try:
         config = RecallConfig.load(config_path)
     except Exception as exc:
         console.print(f"[bold red]Config error:[/] {exc}")
         sys.exit(1)
 
-    base = f"http://127.0.0.1:{config.listen.port}"
     model_name = model or config.provider.default_model
+    direct_base = config.provider.base_url
+    announce = (output_format == "rich")
 
-    # The store reader — the benchmark polls it before/after each turn.
-    from sieve.store import MemoryStore
-    ms = MemoryStore(config.store)
-    if not ms.db_path.exists():
-        console.print(
-            "[bold red]Store not found.[/] Run [cyan]sieve init[/] first."
+    from sieve.cli_benchmark import (
+        run_benchmark, run_benchmark_compare,
+        render_summary, render_compare_summary,
+        render_markdown, summary_to_dict,
+        looks_like_absence_signal, response_recalls,
+    )
+    from sieve._grader import build_recall_grader, build_trap_grader
+
+    # LLM-based graders always hit the LLM directly (bypassing any
+    # proxy) so grading isn't biased by context manipulation.
+    recall_grader = build_recall_grader(
+        direct_base, model_name,
+        fallback=lambda _i, resp: response_recalls(_i, resp),
+    )
+    trap_grader = build_trap_grader(
+        direct_base, model_name,
+        fallback=looks_like_absence_signal,
+    )
+
+    if use_main_store:
+        _run_benchmark_against_main_store(
+            config=config, config_path=config_path, model_name=model_name,
+            direct_base=direct_base, compare=compare, pricing=pricing,
+            output_format=output_format, announce=announce,
+            recall_grader=recall_grader, trap_grader=trap_grader,
         )
-        sys.exit(1)
-    ms.open()
+        return
 
+    # Sandbox path — the default.
+    from sieve._sandbox import SandboxedProxy
+    from sieve.store import MemoryStore
+
+    if announce:
+        console.print(
+            "[dim]Starting sandbox proxy (isolated from your main "
+            "store)…[/]"
+        )
+    try:
+        with SandboxedProxy.from_main_config(config) as sb:
+            if announce:
+                console.print(
+                    f"[dim]Sandbox ready at [cyan]{sb.base_url}[/] "
+                    f"(store: {sb.store_path})[/]\n"
+                )
+            ms = MemoryStore(sb.config.store)
+            ms.open()
+            try:
+                _execute_benchmark(
+                    sieve_base_url=sb.base_url,
+                    direct_base=direct_base,
+                    model_name=model_name,
+                    store=ms,
+                    compare=compare,
+                    pricing=pricing,
+                    output_format=output_format,
+                    announce=announce,
+                    recall_grader=recall_grader,
+                    trap_grader=trap_grader,
+                    run_benchmark=run_benchmark,
+                    run_benchmark_compare=run_benchmark_compare,
+                    render_summary=render_summary,
+                    render_compare_summary=render_compare_summary,
+                    render_markdown=render_markdown,
+                    summary_to_dict=summary_to_dict,
+                )
+            finally:
+                ms.close()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Benchmark interrupted — sandbox cleaned up.[/]")
+        sys.exit(130)
+    except Exception as exc:
+        console.print(f"[bold red]Benchmark failed:[/] {exc}")
+        sys.exit(1)
+
+
+def _execute_benchmark(
+    *,
+    sieve_base_url: str,
+    direct_base: str,
+    model_name: str,
+    store,
+    compare: bool,
+    pricing: str,
+    output_format: str,
+    announce: bool,
+    recall_grader,
+    trap_grader,
+    run_benchmark,
+    run_benchmark_compare,
+    render_summary,
+    render_compare_summary,
+    render_markdown,
+    summary_to_dict,
+) -> None:
+    """Run the benchmark against an already-prepared proxy + store.
+
+    Shared between the sandbox path (default) and the --use-main-store
+    path so the render/format logic lives in one place.
+    """
     def _count() -> int:
         try:
-            return int(ms.stats().get("facts_count", 0))
+            return int(store.stats().get("facts_count", 0))
         except Exception:
             return 0
 
     def _reset_store() -> None:
-        """Clear facts/entities/etc between compare passes.
+        """FK-safe wipe used between --compare passes.
 
-        The baseline pass hits the LLM directly, so nothing should be
-        written — but if the user accidentally points --compare at a
-        store that already has content, we clear it so the Sieve pass
-        starts from zero facts and the "facts learned" column reflects
-        this run only.
-
-        FK-safe order: children first (relationships, vec tables,
-        preferences, etc.), then parents (facts, entities). Falls back
-        to PRAGMA foreign_keys=OFF for the duration of the delete if
-        the ordered approach fails.
+        Called against the sandbox store by default — the user's main
+        store is only touched when --use-main-store is set, in which
+        case we've already warned them.
         """
         try:
-            conn = ms._conn
+            conn = store._conn
             conn.execute("PRAGMA foreign_keys = OFF")
             try:
                 for table in (
@@ -1542,7 +1681,7 @@ def benchmark(
                     try:
                         conn.execute(f"DELETE FROM {table}")
                     except Exception:
-                        pass  # table may not exist
+                        pass
                 conn.commit()
             finally:
                 conn.execute("PRAGMA foreign_keys = ON")
@@ -1551,60 +1690,28 @@ def benchmark(
                 "Store reset failed (non-fatal): %s", exc
             )
 
-    from sieve.cli_benchmark import (
-        run_benchmark, run_benchmark_compare,
-        render_summary, render_compare_summary,
-        render_markdown, summary_to_dict,
-        looks_like_absence_signal, response_recalls,
-    )
-    from sieve._grader import build_recall_grader, build_trap_grader
-
-    # LLM-based graders always bypass Sieve and hit the LLM directly,
-    # so grading isn't biased by whatever context manipulation the
-    # proxy does. Falls back to the keyword heuristics on LLM failure.
-    direct_base = config.provider.base_url
-    recall_grader = build_recall_grader(
-        direct_base, model_name,
-        fallback=lambda _i, resp: response_recalls(_i, resp),
-    )
-    trap_grader = build_trap_grader(
-        direct_base, model_name,
-        fallback=looks_like_absence_signal,
-    )
-
-    # Only announce the run in rich mode — json/markdown output must be
-    # machine-readable and free of progress chatter.
-    announce = (output_format == "rich")
-
     if compare:
         if announce:
             console.print(
                 f"[bold]Sieve benchmark --compare[/] — two passes through "
                 f"agent-shaped payloads\n"
                 f"  baseline: [cyan]{direct_base}[/] (no Sieve)\n"
-                f"  sieve:    [cyan]{base}[/]\n"
+                f"  sieve:    [cyan]{sieve_base_url}[/]\n"
             )
             console.print(
                 "[dim]This takes ~2× a normal benchmark run "
                 "(~2-5 minutes).[/]\n"
             )
-        try:
-            _reset_store()
-            compare_summary = run_benchmark_compare(
-                sieve_base_url=base,
-                direct_base_url=direct_base,
-                model=model_name,
-                store_fact_count=_count,
-                reset_store=_reset_store,
-                grade_recall=recall_grader,
-                grade_trap=trap_grader,
-            )
-        except Exception as exc:
-            console.print(f"[bold red]Benchmark failed:[/] {exc}")
-            ms.close()
-            sys.exit(1)
-        ms.close()
-
+        _reset_store()
+        compare_summary = run_benchmark_compare(
+            sieve_base_url=sieve_base_url,
+            direct_base_url=direct_base,
+            model=model_name,
+            store_fact_count=_count,
+            reset_store=_reset_store,
+            grade_recall=recall_grader,
+            grade_trap=trap_grader,
+        )
         if output_format == "json":
             import json as _json
             print(_json.dumps(
@@ -1616,7 +1723,7 @@ def benchmark(
             print(render_markdown(
                 compare_summary,
                 model=model_name,
-                sieve_base_url=base,
+                sieve_base_url=sieve_base_url,
                 direct_base_url=direct_base,
                 pricing_tier=pricing,
             ))
@@ -1624,7 +1731,7 @@ def benchmark(
         render_compare_summary(
             compare_summary,
             model=model_name,
-            sieve_base_url=base,
+            sieve_base_url=sieve_base_url,
             direct_base_url=direct_base,
             console=console,
             pricing_tier=pricing,
@@ -1634,25 +1741,17 @@ def benchmark(
     if announce:
         console.print(
             f"[bold]Sieve benchmark[/] — 15 messages through the proxy at "
-            f"[cyan]{base}[/] (model: [cyan]{model_name}[/])\n"
+            f"[cyan]{sieve_base_url}[/] (model: [cyan]{model_name}[/])\n"
         )
         console.print("[dim]This may take 1–3 minutes depending on your model.[/]\n")
 
-    try:
-        summary = run_benchmark(
-            base_url=base,
-            model=model_name,
-            store_fact_count=_count,
-            grade_recall=recall_grader,
-            grade_trap=trap_grader,
-        )
-    except Exception as exc:
-        console.print(f"[bold red]Benchmark failed:[/] {exc}")
-        ms.close()
-        sys.exit(1)
-
-    ms.close()
-
+    summary = run_benchmark(
+        base_url=sieve_base_url,
+        model=model_name,
+        store_fact_count=_count,
+        grade_recall=recall_grader,
+        grade_trap=trap_grader,
+    )
     if output_format == "json":
         import json as _json
         print(_json.dumps(
@@ -1664,11 +1763,87 @@ def benchmark(
         print(render_markdown(
             summary,
             model=model_name,
-            sieve_base_url=base,
+            sieve_base_url=sieve_base_url,
             pricing_tier=pricing,
         ))
         return
-    render_summary(summary, model=model_name, base_url=base, console=console)
+    render_summary(summary, model=model_name, base_url=sieve_base_url, console=console)
+
+
+def _run_benchmark_against_main_store(
+    *,
+    config,
+    config_path,
+    model_name: str,
+    direct_base: str,
+    compare: bool,
+    pricing: str,
+    output_format: str,
+    announce: bool,
+    recall_grader,
+    trap_grader,
+) -> None:
+    """--use-main-store path: run against the user's live proxy+store.
+
+    Advanced-only. Warns loudly in --compare mode because that path
+    wipes the store before running.
+    """
+    pid = _read_pid()
+    if pid is None:
+        console.print(
+            "[bold red]Sieve is not running.[/] --use-main-store "
+            "requires [cyan]sieve start[/] in another terminal."
+        )
+        sys.exit(1)
+
+    if compare:
+        console.print(
+            "[bold yellow]WARNING:[/] --compare with --use-main-store "
+            "DELETES all facts/entities/episodes in your main store."
+        )
+        if not click.confirm("Proceed?", default=False):
+            console.print("[yellow]Cancelled.[/]")
+            sys.exit(0)
+
+    from sieve.store import MemoryStore
+    from sieve.cli_benchmark import (
+        run_benchmark, run_benchmark_compare,
+        render_summary, render_compare_summary,
+        render_markdown, summary_to_dict,
+    )
+
+    ms = MemoryStore(config.store)
+    if not ms.db_path.exists():
+        console.print(
+            "[bold red]Store not found.[/] Run [cyan]sieve init[/] first."
+        )
+        sys.exit(1)
+    ms.open()
+    try:
+        sieve_base_url = f"http://127.0.0.1:{config.listen.port}"
+        _execute_benchmark(
+            sieve_base_url=sieve_base_url,
+            direct_base=direct_base,
+            model_name=model_name,
+            store=ms,
+            compare=compare,
+            pricing=pricing,
+            output_format=output_format,
+            announce=announce,
+            recall_grader=recall_grader,
+            trap_grader=trap_grader,
+            run_benchmark=run_benchmark,
+            run_benchmark_compare=run_benchmark_compare,
+            render_summary=render_summary,
+            render_compare_summary=render_compare_summary,
+            render_markdown=render_markdown,
+            summary_to_dict=summary_to_dict,
+        )
+    except Exception as exc:
+        console.print(f"[bold red]Benchmark failed:[/] {exc}")
+        ms.close()
+        sys.exit(1)
+    ms.close()
 
 
 def main() -> None:
