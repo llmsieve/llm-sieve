@@ -63,6 +63,24 @@ BACK = _Sentinel("BACK")
 QUIT = _Sentinel("QUIT")
 
 
+class ResetTo:
+    """Handler return value that clears the nav stack and sets a new root.
+
+    Used when a handler materially changes global state (e.g. install
+    / uninstall) and stale screens on the stack would otherwise show
+    pre-change options. The caller would navigate back through dead
+    options — we replace the whole stack with a fresh root instead.
+
+        return ResetTo(build_top_screen(console))
+    """
+
+    def __init__(self, screen: "MenuScreen"):
+        self.screen = screen
+
+    def __repr__(self) -> str:
+        return f"<menu.ResetTo title={self.screen.title!r}>"
+
+
 # ── Option + Screen ─────────────────────────────────────────────────────
 
 
@@ -205,6 +223,12 @@ class MenuApp:
             if result is QUIT:
                 return
             if result is BACK or result is None:
+                continue
+            if isinstance(result, ResetTo):
+                # Clear the whole stack and replace with the new root.
+                # Used after install / uninstall so stale pre-change
+                # screens can't surface.
+                self._stack = [result.screen]
                 continue
             if isinstance(result, MenuScreen):
                 self._stack.append(result)

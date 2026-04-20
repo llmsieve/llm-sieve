@@ -248,7 +248,190 @@ def test_uninstall_screen_requires_double_confirm():
     assert "confirm" in screen.options[0].label.lower()
 
 
+def test_uninstall_handler_exits_wizard_on_success(tmp_path, monkeypatch):
+    """After a successful uninstall there's nothing left to do — the
+    handler returns QUIT to exit the wizard entirely, rather than
+    ResetTo a disabled-everywhere menu."""
+    from sieve import _wizard_app
+    from sieve._menu import QUIT
+
+    # Pretend Sieve is installed so the option's enabled at build time.
+    sieve_dir = tmp_path / "sieve-dir"
+    sieve_dir.mkdir()
+    (sieve_dir / "sieve.yaml").write_text("listen:\n  port: 11435\n")
+    monkeypatch.setattr(_wizard_app, "SIEVE_DIR", sieve_dir)
+
+    # Stub everything destructive.
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
+    monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
+    import click as _click
+    monkeypatch.setattr(_click, "confirm", lambda *a, **k: True)
+    # Second prompt: they type 'yes' to confirm.
+    monkeypatch.setattr(_click, "prompt", lambda *a, **k: "yes")
+    from sieve._autostart import autostart_status, autostart_supported
+    monkeypatch.setattr("sieve._autostart.autostart_status", lambda: "disabled")
+    monkeypatch.setattr("sieve._autostart.autostart_supported", lambda: True)
+
+    # Redirect the actual rmtree to our tmpdir so nothing real
+    # gets touched.
+    import shutil as _shutil
+    real_rmtree = _shutil.rmtree
+    def _rmtree(p, *a, **kw):
+        real_rmtree(str(p), ignore_errors=True)
+    monkeypatch.setattr(_shutil, "rmtree", _rmtree)
+
+    console, _ = _console()
+    screen = _wizard_app.build_uninstall_screen(console)
+    result = screen.options[0].handler()
+    assert result is QUIT, (
+        f"Uninstall must exit the wizard after removing everything, got {result!r}"
+    )
+
+
+def test_install_to_uninstall_round_trip_via_MenuApp(tmp_path, monkeypatch):
+    """End-to-end: stale top → Install → ResetTo fresh top (Reinstall
+    label, all opts enabled) → Uninstall → QUIT exits. Guards against
+    the bug where the user navigated back through stale install
+    screens."""
+    from sieve import _wizard_app
+    from sieve._menu import MenuApp, QUIT
+
+    sieve_dir = tmp_path / "sieve-dir"
+    monkeypatch.setattr(_wizard_app, "SIEVE_DIR", sieve_dir)
+
+    # Stub provider probe, init_cmd, prompts.
+    monkeypatch.setattr(_wizard_app, "_probe_provider", lambda url, **kw: True)
+    class _FakeInit:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            sieve_dir.mkdir(parents=True, exist_ok=True)
+            (sieve_dir / "sieve.yaml").write_text("listen:\n  port: 11435\n")
+    import sieve.cli
+    monkeypatch.setattr(sieve.cli, "init", _FakeInit)
+    monkeypatch.setattr(_wizard_app, "_render_post_install_status", lambda c: None)
+    monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
+    monkeypatch.setattr("sieve._autostart.autostart_status", lambda: "disabled")
+    monkeypatch.setattr("sieve._autostart.autostart_supported", lambda: True)
+
+    import click as _click
+    monkeypatch.setattr(_click, "confirm", lambda *a, **k: True)
+    monkeypatch.setattr(_click, "prompt", lambda *a, **k: "yes")
+
+    # Navigate: top → 1 (Install) → 1 (Quick) → (reset to fresh top)
+    # → 7 (Uninstall) → 1 (preview+confirm+uninstall) → QUIT.
+    inputs = iter(["1", "1", "7", "1", "q"])
+    def _input(_):
+        return next(inputs)
+
+    console, buf = _console()
+    top = _wizard_app.build_top_screen(console)
+    app = MenuApp(top, console=console, input_fn=_input, clear_between_screens=False)
+    app.run()
+
+    out = buf.getvalue()
+    # After install, the top's title is still "Sieve" but the first
+    # option flipped from "Install" to "Reinstall" — the fresh screen
+    # took effect.
+    assert "Reinstall" in out
+    # After uninstall, the process exited the wizard (QUIT).
+    # We can't directly observe QUIT from the buffer but we can
+    # check that the state actually changed: sieve.yaml gone.
+    assert not (sieve_dir / "sieve.yaml").exists() or not sieve_dir.exists()
+
+
 # ── Menu navigation end-to-end ────────────────────────────────────────
+
+
+def test_quick_install_returns_ResetTo_so_stack_refreshes(tmp_path, monkeypatch):
+    """Post-install the nav stack has stale screens with enabled=False
+    options. The install handler must return ResetTo(top) so the
+    wizard's navigation reflects the new installed state."""
+    from sieve import _wizard_app
+    from sieve._menu import ResetTo
+
+    # Simulate a clean pre-install state for build_top_screen.
+    monkeypatch.setattr(_wizard_app, "SIEVE_DIR", tmp_path / "fake-sieve")
+
+    # Stub the heavy bits: provider probe says "reachable", init_cmd
+    # is a no-op, post-install status render is swallowed.
+    monkeypatch.setattr(_wizard_app, "_probe_provider", lambda url, **kw: True)
+    class _FakeInit:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            # Simulate what `sieve init` does: create sieve.yaml.
+            (tmp_path / "fake-sieve").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "fake-sieve" / "sieve.yaml").write_text("listen:\n  port: 11435\n")
+    import sieve.cli
+    monkeypatch.setattr(sieve.cli, "init", _FakeInit)
+    monkeypatch.setattr(_wizard_app, "_render_post_install_status", lambda c: None)
+    monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
+
+    console, _ = _console()
+    result = _wizard_app._run_quick_install(console)
+    assert isinstance(result, ResetTo), (
+        f"Quick install must ResetTo a fresh top screen, got {result!r}"
+    )
+    # The replacement screen is a fresh top — should have the
+    # post-install label (Reinstall, not Install) since we just
+    # wrote sieve.yaml.
+    assert any(
+        opt.label.startswith("Reinstall") for opt in result.screen.options
+    ), "Fresh top should reflect installed state"
+
+
+def test_service_handlers_return_fresh_service_screen(monkeypatch):
+    """Start/Stop/Restart handlers rebuild the service screen so the
+    status line and enabled flags reflect the new running state."""
+    from sieve import _wizard_app
+    from sieve._menu import MenuScreen
+
+    # PID None → build service screen with Stop disabled.
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: None)
+    console, _ = _console()
+    screen = _wizard_app.build_service_screen(console)
+
+    # Find the Start handler and stub the actual `sieve start`.
+    start_opt = next(o for o in screen.options if o.label == "Start")
+
+    class _FakeStart:
+        @staticmethod
+        def main(standalone_mode=False, args=None):
+            pass
+    import sieve.cli
+    monkeypatch.setattr(sieve.cli, "start", _FakeStart)
+    monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
+
+    # Now flip to "running" for the rebuild.
+    monkeypatch.setattr("sieve.cli._read_pid", lambda: 4242)
+    result = start_opt.handler()
+    assert isinstance(result, MenuScreen), (
+        f"Service start handler must return a fresh MenuScreen, got {result!r}"
+    )
+    # The rebuilt screen shows the new running state.
+    assert "Running" in result.subtitle
+
+
+def test_config_setting_handler_returns_BACK(monkeypatch, tmp_path):
+    """Changing a config setting does NOT require a stack reset —
+    the top screen's enabled flags don't depend on config values.
+    BACK is correct."""
+    from sieve import _wizard_app
+    from sieve._menu import BACK
+
+    monkeypatch.setenv("SIEVE_CONFIG", str(_make_yaml(tmp_path)))
+    monkeypatch.setattr(_wizard_app, "_store_fact_count", lambda: 5)
+    # No prompt: simulate user hits enter to keep current.
+    import click as _click
+    monkeypatch.setattr(_click, "prompt", lambda *a, **k: k.get("default", ""))
+    monkeypatch.setattr(_wizard_app, "_pause_for_enter", lambda c, label="": None)
+
+    console, _ = _console()
+    screen = _wizard_app.build_config_screen(console)
+    # First editable option (model or whatever is first). Invoke its handler.
+    opt = next(o for o in screen.options if "=" in o.label)
+    result = opt.handler()
+    assert result is BACK, f"Config setting handler should BACK, got {result!r}"
 
 
 def test_navigation_top_to_install_and_back(tmp_path, monkeypatch):

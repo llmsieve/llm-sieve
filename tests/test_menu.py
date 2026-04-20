@@ -19,7 +19,7 @@ from io import StringIO
 import pytest
 from rich.console import Console
 
-from sieve._menu import BACK, QUIT, MenuApp, MenuOption, MenuScreen
+from sieve._menu import BACK, QUIT, MenuApp, MenuOption, MenuScreen, ResetTo
 
 
 def _app_with_inputs(screen: MenuScreen, inputs: list[str]) -> tuple[MenuApp, StringIO]:
@@ -233,6 +233,38 @@ def test_handler_exception_is_caught_and_shown():
 
 
 # ── Keyed options ───────────────────────────────────────────────────────
+
+
+def test_reset_to_replaces_entire_stack():
+    """A handler returning ResetTo(new_root) clears everything on the
+    stack and replaces it with the new root. This is the mechanism
+    install / uninstall use so the user doesn't navigate back to a
+    stale pre-change menu."""
+
+    fresh_top_calls = []
+
+    def _install_like():
+        fresh_top_calls.append(1)
+        new_top = MenuScreen(
+            title="Fresh Top",
+            options=[MenuOption("ok", lambda: BACK)],
+        )
+        return ResetTo(new_top)
+
+    initial_top = MenuScreen(
+        title="Stale Top",
+        options=[MenuOption("Install", _install_like)],
+    )
+    app, buf = _app_with_inputs(initial_top, ["1", "q"])
+    app.run()
+    out = buf.getvalue()
+    # The fresh top rendered.
+    assert "Fresh Top" in out
+    # The stale top rendered ONCE (before we ResetTo'd away) and
+    # never again — even on the final render before the user typed q.
+    assert out.count("Stale Top\n") <= 1 or out.count("Stale Top") == 1
+    # Handler ran exactly once.
+    assert fresh_top_calls == [1]
 
 
 def test_option_with_explicit_key_is_selected_by_that_key():

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import click
 
-from sieve._menu import BACK, QUIT, MenuApp, MenuOption, MenuScreen
+from sieve._menu import BACK, QUIT, MenuApp, MenuOption, MenuScreen, ResetTo
 from sieve._branding import render_splash
 
 logger = logging.getLogger("recall.wizard")
@@ -327,7 +327,10 @@ def _run_quick_install(console):
         return BACK
     _render_post_install_status(console)
     _pause_for_enter(console)
-    return BACK
+    # Rebuild the top screen from a fresh install state — otherwise
+    # the user navigates back to a stale "Install everything's
+    # unavailable" menu despite having just installed.
+    return ResetTo(build_top_screen(console))
 
 
 def _run_guided_install(console):
@@ -420,7 +423,9 @@ def _run_guided_install(console):
 
     _render_post_install_status(console)
     _pause_for_enter(console)
-    return BACK
+    # Reset to a fresh top screen so the newly-installed state is
+    # reflected. See the comment on the quick-install path.
+    return ResetTo(build_top_screen(console))
 
 
 def _render_post_install_status(console) -> None:
