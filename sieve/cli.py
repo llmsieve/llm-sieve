@@ -1485,36 +1485,101 @@ def _run_demo_loop(
         console.print()
 
 
+_FIXTURE_CHOICES = ("small", "medium", "large", "xlarge")
+_PRICING_CHOICES = (
+    "local", "claude-opus", "claude-sonnet", "claude-haiku",
+    "gpt-4o", "gpt-4o-mini",
+)
+
+
+def _fixture_menu_label(name: str) -> str:
+    """Human label for wizard listing, e.g. 'medium   ~20K tokens — Cursor ...'."""
+    from sieve._agent_fixture import fixture_approx_tokens, fixture_description
+    base = fixture_approx_tokens(name)
+    return f"{name:<7} ~{base:>6,} base tokens  —  {fixture_description(name)}"
+
+
+def _looks_like_local(direct_base_url: str) -> bool:
+    """Heuristic: is the configured LLM endpoint localhost / LAN?"""
+    lo = (direct_base_url or "").lower()
+    return (
+        "localhost" in lo
+        or "127.0.0.1" in lo
+        or "://192.168." in lo
+        or "://10." in lo
+        or "://172.16." in lo
+    )
+
+
+def _context_window_warning_text(fixture: str, model_name: str, base_url: str) -> str:
+    """Text shown before running a heavy fixture against what looks like a local model."""
+    from sieve._agent_fixture import fixture_approx_tokens
+    base = fixture_approx_tokens(fixture)
+    return (
+        f"Fixture '{fixture}' ships ~{base:,} tokens of base payload per turn "
+        f"(+ tool schemas + growing history, typically 2-3× more by turn 15).\n"
+        f"  Your LLM endpoint is {base_url} with model '{model_name}'.\n"
+        f"  Many local models cap context at 4K-32K tokens — on a model below\n"
+        f"  the fixture size the baseline will truncate, which makes its\n"
+        f"  results reflect truncation behaviour rather than real baseline.\n"
+        f"  On cloud models this works fine but charges per input token — your\n"
+        f"  $/run figure will be correspondingly large."
+    )
+
+
 @cli.command()
 @click.option("--config", "-c", "config_path", default=None, help="Path to sieve.yaml")
-@click.option("--model", default=None, help="Override the model name (defaults to provider.default_model)")
 @click.option(
-    "--compare",
-    is_flag=True,
-    default=False,
-    help=(
-        "Two-pass benchmark: run the 15-turn script through both the raw LLM "
-        "(baseline) and the Sieve proxy, using an agent-shaped payload each "
-        "turn. Prints side-by-side tokens + latency. Takes ~2× as long."
-    ),
+    "--fixture",
+    type=click.Choice(_FIXTURE_CHOICES, case_sensitive=False),
+    default=None,
+    help="Payload size. small=light agent, medium=Cursor-like (default), "
+    "large=Claude Code mid-session, xlarge=autonomous run. Overrides wizard.",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Model to test. Defaults to provider.default_model from sieve.yaml.",
+)
+@click.option(
+    "--grader-model",
+    default=None,
+    help="Model used to grade recall + trap. Defaults to --model (self-grading, "
+    "not recommended for shareable reports). Pass a different model for "
+    "independent scoring.",
+)
+@click.option(
+    "--turns",
+    type=int,
+    default=None,
+    help="Turns per run. Default 15.",
+)
+@click.option(
+    "--runs",
+    type=int,
+    default=None,
+    help="Number of full script runs (for mean ± stddev). Default 3.",
 )
 @click.option(
     "--pricing",
-    type=click.Choice(
-        ["local", "claude-opus", "claude-sonnet", "claude-haiku",
-         "gpt-4o", "gpt-4o-mini"],
-        case_sensitive=False,
-    ),
-    default="local",
-    help="Pricing tier for the cost panel (default: local / free).",
+    type=click.Choice(list(_PRICING_CHOICES), case_sensitive=False),
+    default=None,
+    help="Pricing tier for the cost panel. Default: local (no $ shown).",
 )
 @click.option(
     "--format",
     "output_format",
     type=click.Choice(["rich", "json", "markdown"], case_sensitive=False),
-    default="rich",
-    help="Output format. 'rich' for terminal, 'json' for scripting, "
-    "'markdown' for paste-into-README.",
+    default=None,
+    help="Terminal output format. 'rich' (default), 'json', or 'markdown'. "
+    "A shareable markdown report is always written to ~/.sieve/benchmarks/ "
+    "regardless of this flag.",
+)
+@click.option(
+    "--no-input",
+    is_flag=True,
+    default=False,
+    help="Skip the interactive wizard; use flag values and defaults.",
 )
 @click.option(
     "--use-main-store",
@@ -1522,29 +1587,31 @@ def _run_demo_loop(
     default=False,
     help=(
         "Run against the user's main proxy and store instead of an "
-        "ephemeral sandbox. Advanced/debug use only — a benchmark run "
-        "adds ~11 Sam/Alex/Luna facts to the live store, and --compare "
-        "would delete all existing facts. Requires `sieve start` first."
+        "ephemeral sandbox. Advanced/debug use only. Requires `sieve start`."
     ),
 )
 def benchmark(
     config_path: str | None,
+    fixture: str | None,
     model: str | None,
-    compare: bool,
-    pricing: str,
-    output_format: str,
+    grader_model: str | None,
+    turns: int | None,
+    runs: int | None,
+    pricing: str | None,
+    output_format: str | None,
+    no_input: bool,
     use_main_store: bool,
 ):
-    """Run a reproducible 15-message benchmark.
+    """Run a reproducible benchmark: baseline (direct LLM) vs Sieve.
 
-    By default spins up an isolated sandbox proxy with a scratch store,
-    runs the benchmark, and tears everything down — the user's real
-    proxy and store are never touched. Pass ``--use-main-store`` to
-    run against the live install (advanced/debug only).
+    Defaults: sandboxed, agent-shaped payload, 3 runs × 15 turns on the
+    'medium' fixture with the user's configured model. A markdown report
+    is always saved to ~/.sieve/benchmarks/.
 
-    Default mode demonstrates memory + recall features on a bare-chat
-    baseline. Use ``--compare`` to demonstrate token reduction against
-    a realistic agent-shaped inbound payload.
+    With no flags and an interactive terminal, this launches a short
+    wizard to let you customise fixture size / model / grader / turns /
+    runs / pricing before running. Any flag suppresses the wizard.
+    Pass ``--no-input`` to always skip the wizard (CI use).
     """
     try:
         config = RecallConfig.load(config_path)
@@ -1552,39 +1619,119 @@ def benchmark(
         console.print(f"[bold red]Config error:[/] {exc}")
         sys.exit(1)
 
-    model_name = model or config.provider.default_model
-    direct_base = config.provider.base_url
-    announce = (output_format == "rich")
+    # Decide whether to launch the wizard: only when stdin is a TTY,
+    # --no-input wasn't passed, and the user didn't already supply
+    # any customisation flag.
+    any_flag_passed = any(v is not None for v in
+        (fixture, model, grader_model, turns, runs, pricing, output_format)
+    )
+    run_wizard = (
+        not no_input
+        and not any_flag_passed
+        and sys.stdin.isatty()
+    )
 
+    # Apply defaults early so the wizard can show them and the flag
+    # path can override selectively.
+    fixture = (fixture or "medium").lower()
+    turns = turns if turns is not None else 15
+    runs = runs if runs is not None else 3
+    pricing = (pricing or "local").lower()
+    output_format = (output_format or "rich").lower()
+    model_name = model or config.provider.default_model
+    grader_name = grader_model or model_name
+
+    if run_wizard:
+        (fixture, model_name, grader_name, turns, runs, pricing,
+         output_format) = _benchmark_wizard(
+            fixture, model_name, grader_name, turns, runs, pricing, output_format,
+        )
+
+    direct_base = config.provider.base_url
+
+    # Context-window warning for heavy fixtures on local models.
+    skipped_fixtures: list[str] = []
+    cwin_warning_text: str | None = None
+    if fixture in ("large", "xlarge") and _looks_like_local(direct_base):
+        if no_input:
+            cwin_warning_text = (
+                f"'{fixture}' run with --no-input against a local-looking "
+                f"endpoint; baseline truncation possible, not inspected."
+            )
+        else:
+            console.print()
+            console.print(
+                Panel_lite_warning(
+                    _context_window_warning_text(fixture, model_name, direct_base)
+                )
+            )
+            go = click.confirm(
+                f"Continue with fixture='{fixture}'?",
+                default=False,
+            )
+            if not go:
+                skipped_fixtures.append(fixture)
+                # Fall back to medium so the user still gets a result.
+                console.print(
+                    f"[yellow]Skipping '{fixture}'; running 'medium' instead.[/]"
+                )
+                fixture = "medium"
+            else:
+                cwin_warning_text = (
+                    f"'{fixture}' accepted by user despite local-endpoint "
+                    f"warning; baseline may truncate."
+                )
+
+    self_grading = (grader_name == model_name)
+    if self_grading:
+        console.print(
+            "\n[yellow]⚠ Self-grading:[/] the recall grader is the same "
+            "model being tested.\n"
+            "  Skeptics flag this as a potential bias source. For a "
+            "shareable report,\n"
+            "  pass [cyan]--grader-model <different-model>[/] to use an "
+            "independent grader.\n"
+        )
+
+    announce = (output_format == "rich")
     from sieve.cli_benchmark import (
-        run_benchmark, run_benchmark_compare,
-        render_summary, render_compare_summary,
-        render_markdown, summary_to_dict,
+        run_benchmark_compare_multi,
+        render_aggregated_compare_summary,
+        render_aggregated_markdown,
+        build_headline,
         looks_like_absence_signal, response_recalls,
     )
     from sieve._grader import build_recall_grader, build_trap_grader
+    from sieve._agent_fixture import fixture_for, fixture_description
 
-    # LLM-based graders always hit the LLM directly (bypassing any
-    # proxy) so grading isn't biased by context manipulation.
+    # Graders hit the LLM directly (bypassing Sieve) so grading isn't
+    # biased by context manipulation.
     recall_grader = build_recall_grader(
-        direct_base, model_name,
+        direct_base, grader_name,
         fallback=lambda _i, resp: response_recalls(_i, resp),
     )
     trap_grader = build_trap_grader(
-        direct_base, model_name,
+        direct_base, grader_name,
         fallback=looks_like_absence_signal,
     )
 
+    # Scope-over the agent fixture for this run.
+    wrap_payload = fixture_for(fixture)
+    def _wrap(user: str, mdl: str, history: list, strm: bool) -> dict:
+        return wrap_payload(user, mdl, history=history, stream=strm)
+    _WrapAdapter.set(wrap_payload)
+
     if use_main_store:
-        _run_benchmark_against_main_store(
-            config=config, config_path=config_path, model_name=model_name,
-            direct_base=direct_base, compare=compare, pricing=pricing,
-            output_format=output_format, announce=announce,
-            recall_grader=recall_grader, trap_grader=trap_grader,
+        _run_benchmark_against_main_store_v2(
+            config=config, model_name=model_name, direct_base=direct_base,
+            fixture=fixture, grader_name=grader_name,
+            turns=turns, runs=runs, pricing=pricing, output_format=output_format,
+            announce=announce, recall_grader=recall_grader, trap_grader=trap_grader,
+            context_window_warning=cwin_warning_text,
+            skipped_fixtures=skipped_fixtures,
         )
         return
 
-    # Sandbox path — the default.
     from sieve._sandbox import SandboxedProxy
     from sieve.store import MemoryStore
 
@@ -1597,29 +1744,27 @@ def benchmark(
         with SandboxedProxy.from_main_config(config) as sb:
             if announce:
                 console.print(
-                    f"[dim]Sandbox ready at [cyan]{sb.base_url}[/] "
-                    f"(store: {sb.store_path})[/]\n"
+                    f"[dim]Sandbox ready at [cyan]{sb.base_url}[/]\n[/]"
                 )
             ms = MemoryStore(sb.config.store)
             ms.open()
             try:
-                _execute_benchmark(
+                _execute_benchmark_v2(
                     sieve_base_url=sb.base_url,
                     direct_base=direct_base,
                     model_name=model_name,
+                    grader_name=grader_name,
+                    fixture=fixture,
                     store=ms,
-                    compare=compare,
+                    turns=turns,
+                    runs=runs,
                     pricing=pricing,
                     output_format=output_format,
                     announce=announce,
                     recall_grader=recall_grader,
                     trap_grader=trap_grader,
-                    run_benchmark=run_benchmark,
-                    run_benchmark_compare=run_benchmark_compare,
-                    render_summary=render_summary,
-                    render_compare_summary=render_compare_summary,
-                    render_markdown=render_markdown,
-                    summary_to_dict=summary_to_dict,
+                    context_window_warning=cwin_warning_text,
+                    skipped_fixtures=skipped_fixtures,
                 )
             finally:
                 ms.close()
@@ -1628,33 +1773,170 @@ def benchmark(
         sys.exit(130)
     except Exception as exc:
         console.print(f"[bold red]Benchmark failed:[/] {exc}")
-        sys.exit(1)
+        raise
 
 
-def _execute_benchmark(
+def Panel_lite_warning(text: str):
+    """Inline Panel factory — imports lazily to avoid a global rich dep."""
+    from rich.panel import Panel
+    return Panel(text, title="⚠  Context-window warning", border_style="yellow")
+
+
+class _WrapAdapter:
+    """Thread-safe-ish module-level slot for the active fixture wrap.
+
+    The run_benchmark_compare_multi function signature doesn't carry
+    the wrap. We inject via this slot so it's picked up by each pass
+    inside the multi-run loop.
+    """
+    _fn = None
+
+    @classmethod
+    def set(cls, fn):
+        cls._fn = fn
+
+    @classmethod
+    def get(cls):
+        return cls._fn
+
+
+def _benchmark_wizard(
+    fixture_default: str,
+    model_default: str,
+    grader_default: str,
+    turns_default: int,
+    runs_default: int,
+    pricing_default: str,
+    format_default: str,
+):
+    """Interactive menu. Each answer maps 1:1 to a flag.
+
+    Ends by echoing the equivalent flag-form command so the user can
+    paste it into CI or sharing.
+    """
+    from sieve._agent_fixture import fixture_names
+
+    console.print()
+    console.print("[bold]Sieve benchmark setup[/]")
+    console.print(
+        "[dim]Customise, or accept defaults. Each option maps to a "
+        "flag — the equivalent command is shown at the end.[/]\n"
+    )
+
+    # Fixture
+    console.print("[bold]Agent payload size:[/]")
+    for name in fixture_names():
+        marker = " (default)" if name == fixture_default else ""
+        console.print(f"  {_fixture_menu_label(name)}{marker}")
+    fixture = click.prompt(
+        "Choose fixture",
+        type=click.Choice(fixture_names(), case_sensitive=False),
+        default=fixture_default,
+        show_default=True,
+    )
+
+    # Model
+    model_name = click.prompt(
+        "\nModel to test",
+        default=model_default,
+        show_default=True,
+    ).strip()
+
+    # Grader model
+    console.print(
+        "\n[dim]The grader answers yes/no on each recall + trap. "
+        "Using the same model as the one being tested is 'self-grading' "
+        "— skeptics will flag it. For shareable reports, choose a "
+        "different grader.[/]"
+    )
+    grader_name = click.prompt(
+        "Grader model (Enter for same as test model)",
+        default=grader_default,
+        show_default=True,
+    ).strip()
+
+    # Turns
+    turns = click.prompt(
+        "\nTurns per run",
+        type=int,
+        default=turns_default,
+        show_default=True,
+    )
+
+    # Runs
+    console.print(
+        "\n[dim]More runs = tighter stddev estimate. "
+        "Each run adds ~1-3 minutes depending on model speed.[/]"
+    )
+    runs = click.prompt(
+        "Number of runs",
+        type=int,
+        default=runs_default,
+        show_default=True,
+    )
+
+    # Pricing
+    console.print(
+        "\n[bold]Pricing tier[/] (for cost panel — 'local' means no "
+        "$ shown):"
+    )
+    pricing = click.prompt(
+        "Pricing",
+        type=click.Choice(list(_PRICING_CHOICES), case_sensitive=False),
+        default=pricing_default,
+        show_default=True,
+    )
+
+    # Output format
+    output_format = click.prompt(
+        "\nTerminal output format",
+        type=click.Choice(["rich", "json", "markdown"], case_sensitive=False),
+        default=format_default,
+        show_default=True,
+    )
+
+    # Equivalent command — the "paste into CI" line.
+    console.print()
+    console.print("[bold]Equivalent command:[/]")
+    console.print(
+        f"  [cyan]sieve benchmark --fixture {fixture} --model {model_name} "
+        f"--grader-model {grader_name} --turns {turns} --runs {runs} "
+        f"--pricing {pricing} --format {output_format}[/]"
+    )
+    console.print()
+
+    return fixture, model_name, grader_name, turns, runs, pricing, output_format
+
+
+def _execute_benchmark_v2(
     *,
     sieve_base_url: str,
     direct_base: str,
     model_name: str,
+    grader_name: str,
+    fixture: str,
     store,
-    compare: bool,
+    turns: int,
+    runs: int,
     pricing: str,
     output_format: str,
     announce: bool,
     recall_grader,
     trap_grader,
-    run_benchmark,
-    run_benchmark_compare,
-    render_summary,
-    render_compare_summary,
-    render_markdown,
-    summary_to_dict,
+    context_window_warning: str | None,
+    skipped_fixtures: list[str],
 ) -> None:
-    """Run the benchmark against an already-prepared proxy + store.
+    """Run the multi-run compare against a prepared proxy + store.
 
-    Shared between the sandbox path (default) and the --use-main-store
-    path so the render/format logic lives in one place.
+    Writes the markdown report to ~/.sieve/benchmarks/<ISO>.md always;
+    output_format controls the terminal.
     """
+    from sieve.cli_benchmark import (
+        run_benchmark_compare_multi,
+        render_aggregated_compare_summary,
+        render_aggregated_markdown,
+    )
+
     def _count() -> int:
         try:
             return int(store.stats().get("facts_count", 0))
@@ -1662,21 +1944,14 @@ def _execute_benchmark(
             return 0
 
     def _reset_store() -> None:
-        """FK-safe wipe used between --compare passes.
-
-        Called against the sandbox store by default — the user's main
-        store is only touched when --use-main-store is set, in which
-        case we've already warned them.
-        """
         try:
             conn = store._conn
             conn.execute("PRAGMA foreign_keys = OFF")
             try:
                 for table in (
-                    "vec_facts", "vec_episodes",
-                    "relationships", "preferences", "known_unknowns",
-                    "audit_log", "fingerprints", "sessions",
-                    "episodes", "facts", "entities",
+                    "vec_facts", "vec_episodes", "relationships",
+                    "preferences", "known_unknowns", "audit_log",
+                    "fingerprints", "sessions", "episodes", "facts", "entities",
                 ):
                     try:
                         conn.execute(f"DELETE FROM {table}")
@@ -1690,104 +1965,195 @@ def _execute_benchmark(
                 "Store reset failed (non-fatal): %s", exc
             )
 
-    if compare:
-        if announce:
-            console.print(
-                f"[bold]Sieve benchmark --compare[/] — two passes through "
-                f"agent-shaped payloads\n"
-                f"  baseline: [cyan]{direct_base}[/] (no Sieve)\n"
-                f"  sieve:    [cyan]{sieve_base_url}[/]\n"
-            )
-            console.print(
-                "[dim]This takes ~2× a normal benchmark run "
-                "(~2-5 minutes).[/]\n"
-            )
-        _reset_store()
-        compare_summary = run_benchmark_compare(
+    if announce:
+        console.print(
+            f"[bold]Running {runs} × {turns}-turn benchmark[/] "
+            f"with fixture '{fixture}'…"
+        )
+        console.print(
+            f"  baseline: [cyan]{direct_base}[/] (no Sieve)\n"
+            f"  sieve:    [cyan]{sieve_base_url}[/]"
+        )
+        console.print(
+            f"[dim]Estimated time: "
+            f"~{runs * 2 * turns // 6}–{runs * 2 * turns // 3} minutes "
+            "depending on model speed.[/]\n"
+        )
+
+    # Build a multi-run result by wrapping run_benchmark_compare's
+    # internal agent-shaped fixture via our module-level adapter.
+    def _progress(i: int, total: int, phase: str) -> None:
+        if not announce or phase == "done":
+            return
+        console.print(f"[dim]  run {i}/{total} — {phase} pass…[/]")
+
+    # Inject the chosen fixture into run_benchmark_compare_multi via
+    # the module-level slot (run_benchmark_compare internally imports
+    # build_agent_payload from _agent_fixture; _WrapAdapter patches it
+    # for this call).
+    import sieve._agent_fixture as fx
+    original = fx.build_agent_payload
+    fx.build_agent_payload = _WrapAdapter.get()
+    try:
+        agg = run_benchmark_compare_multi(
+            runs=runs,
             sieve_base_url=sieve_base_url,
             direct_base_url=direct_base,
             model=model_name,
             store_fact_count=_count,
             reset_store=_reset_store,
+            messages=_BENCHMARK_TURNS(turns),
             grade_recall=recall_grader,
             grade_trap=trap_grader,
+            progress=_progress,
         )
-        if output_format == "json":
-            import json as _json
-            print(_json.dumps(
-                summary_to_dict(compare_summary, model=model_name, pricing_tier=pricing),
-                indent=2,
-            ))
-            return
-        if output_format == "markdown":
-            print(render_markdown(
-                compare_summary,
-                model=model_name,
-                sieve_base_url=sieve_base_url,
-                direct_base_url=direct_base,
-                pricing_tier=pricing,
-            ))
-            return
-        render_compare_summary(
-            compare_summary,
-            model=model_name,
-            sieve_base_url=sieve_base_url,
-            direct_base_url=direct_base,
-            console=console,
-            pricing_tier=pricing,
-        )
-        return
+    finally:
+        fx.build_agent_payload = original
 
-    if announce:
-        console.print(
-            f"[bold]Sieve benchmark[/] — 15 messages through the proxy at "
-            f"[cyan]{sieve_base_url}[/] (model: [cyan]{model_name}[/])\n"
-        )
-        console.print("[dim]This may take 1–3 minutes depending on your model.[/]\n")
-
-    summary = run_benchmark(
-        base_url=sieve_base_url,
+    # Render markdown artifact always.
+    md_text = render_aggregated_markdown(
+        agg,
         model=model_name,
-        store_fact_count=_count,
-        grade_recall=recall_grader,
-        grade_trap=trap_grader,
+        grader_model=grader_name,
+        fixture=fixture,
+        sieve_base_url=sieve_base_url,
+        direct_base_url=direct_base,
+        pricing_tier=pricing,
+        turns_per_run=turns,
+        skipped_fixtures=skipped_fixtures or None,
+        context_window_warning=context_window_warning,
     )
+    md_path = _write_benchmark_report(md_text)
+
     if output_format == "json":
         import json as _json
-        print(_json.dumps(
-            summary_to_dict(summary, model=model_name, pricing_tier=pricing),
-            indent=2,
-        ))
+        payload = _aggregated_to_dict(
+            agg, model=model_name, grader_model=grader_name,
+            fixture=fixture, pricing_tier=pricing,
+            report_path=str(md_path) if md_path else None,
+            skipped_fixtures=skipped_fixtures,
+            context_window_warning=context_window_warning,
+        )
+        print(_json.dumps(payload, indent=2))
         return
+
     if output_format == "markdown":
-        print(render_markdown(
-            summary,
-            model=model_name,
-            sieve_base_url=sieve_base_url,
-            pricing_tier=pricing,
-        ))
+        print(md_text)
+        if md_path:
+            console.print(f"\n[dim]Saved to: {md_path}[/]")
         return
-    render_summary(summary, model=model_name, base_url=sieve_base_url, console=console)
+
+    render_aggregated_compare_summary(
+        agg,
+        model=model_name,
+        grader_model=grader_name,
+        fixture=fixture,
+        sieve_base_url=sieve_base_url,
+        direct_base_url=direct_base,
+        console=console,
+        pricing_tier=pricing,
+        turns_per_run=turns,
+        context_window_warning=context_window_warning,
+        skipped_fixtures=skipped_fixtures or None,
+    )
+    if md_path:
+        console.print(f"\n[dim]📎 Shareable report: [cyan]{md_path}[/][/]")
 
 
-def _run_benchmark_against_main_store(
+def _BENCHMARK_TURNS(n: int):
+    """Return the first n scripted messages, repeating deep-phase turns
+    if n > 15. Bounded to a minimum of 3 so the script has an intro."""
+    from sieve.cli_benchmark import BENCHMARK_MESSAGES
+    msgs = list(BENCHMARK_MESSAGES)
+    if n <= len(msgs):
+        return msgs[: max(3, n)]
+    extra = [m for m in msgs if m["phase"] == "deep"]
+    out = list(msgs)
+    while len(out) < n:
+        out.extend(extra)
+    return out[:n]
+
+
+def _write_benchmark_report(md_text: str):
+    """Save the markdown report to ~/.sieve/benchmarks/<ISO>.md.
+
+    Returns the path on success, None on failure (silent — the report
+    is a convenience artifact; terminal output is the source of truth).
+    """
+    from datetime import datetime, timezone
+    try:
+        dest_dir = SIEVE_DIR / "benchmarks"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        path = dest_dir / f"{stamp}.md"
+        path.write_text(md_text)
+        return path
+    except Exception as exc:
+        logging.getLogger("recall.cli").warning(
+            "Failed to save benchmark report: %s", exc
+        )
+        return None
+
+
+def _aggregated_to_dict(agg, *, model, grader_model, fixture, pricing_tier,
+                        report_path=None, skipped_fixtures=None,
+                        context_window_warning=None) -> dict:
+    """JSON-serialisable view of an AggregatedCompareSummary."""
+    from sieve._pricing import dollars_saved, price_for
+    saved = agg.tokens_saved.mean
+    return {
+        "mode": "compare_aggregated",
+        "model": model,
+        "grader_model": grader_model,
+        "fixture": fixture,
+        "pricing_tier": pricing_tier,
+        "runs": len(agg.runs),
+        "baseline_tokens_mean": agg.baseline_tokens.mean,
+        "baseline_tokens_stddev": agg.baseline_tokens.stddev,
+        "sieve_outbound_tokens_mean": agg.sieve_outbound_tokens.mean,
+        "sieve_outbound_tokens_stddev": agg.sieve_outbound_tokens.stddev,
+        "tokens_saved_mean": agg.tokens_saved.mean,
+        "tokens_saved_stddev": agg.tokens_saved.stddev,
+        "reduction_pct_mean": agg.reduction_pct.mean,
+        "reduction_pct_stddev": agg.reduction_pct.stddev,
+        "correct_recalls_per_run": agg.correct_recalls_per_run,
+        "gradable_recalls": agg.gradable_recalls,
+        "trap_absence_per_run": agg.trap_absence_per_run,
+        "facts_learned_per_run": agg.facts_learned_per_run,
+        "baseline_wall_clock_s_mean": agg.baseline_wall_clock_s.mean,
+        "sieve_wall_clock_s_mean": agg.sieve_wall_clock_s.mean,
+        "dollars_saved_per_run": (
+            round(dollars_saved(saved, pricing_tier), 6)
+            if price_for(pricing_tier) > 0 else 0.0
+        ),
+        "dollars_saved_per_1k_runs": (
+            round(dollars_saved(saved, pricing_tier) * 1000, 4)
+            if price_for(pricing_tier) > 0 else 0.0
+        ),
+        "skipped_fixtures": skipped_fixtures or [],
+        "context_window_warning": context_window_warning,
+        "report_path": report_path,
+    }
+
+
+def _run_benchmark_against_main_store_v2(
     *,
     config,
-    config_path,
     model_name: str,
     direct_base: str,
-    compare: bool,
+    fixture: str,
+    grader_name: str,
+    turns: int,
+    runs: int,
     pricing: str,
     output_format: str,
     announce: bool,
     recall_grader,
     trap_grader,
+    context_window_warning: str | None,
+    skipped_fixtures: list[str],
 ) -> None:
-    """--use-main-store path: run against the user's live proxy+store.
-
-    Advanced-only. Warns loudly in --compare mode because that path
-    wipes the store before running.
-    """
+    """--use-main-store path: run against the user's live proxy+store."""
     pid = _read_pid()
     if pid is None:
         console.print(
@@ -1796,22 +2162,16 @@ def _run_benchmark_against_main_store(
         )
         sys.exit(1)
 
-    if compare:
-        console.print(
-            "[bold yellow]WARNING:[/] --compare with --use-main-store "
-            "DELETES all facts/entities/episodes in your main store."
-        )
-        if not click.confirm("Proceed?", default=False):
-            console.print("[yellow]Cancelled.[/]")
-            sys.exit(0)
+    console.print(
+        "[bold yellow]WARNING:[/] --use-main-store will mutate your "
+        "main store. Each run's baseline pass will delete facts; "
+        "each Sieve pass will write new ones."
+    )
+    if not click.confirm("Proceed?", default=False):
+        console.print("[yellow]Cancelled.[/]")
+        sys.exit(0)
 
     from sieve.store import MemoryStore
-    from sieve.cli_benchmark import (
-        run_benchmark, run_benchmark_compare,
-        render_summary, render_compare_summary,
-        render_markdown, summary_to_dict,
-    )
-
     ms = MemoryStore(config.store)
     if not ms.db_path.exists():
         console.print(
@@ -1821,29 +2181,25 @@ def _run_benchmark_against_main_store(
     ms.open()
     try:
         sieve_base_url = f"http://127.0.0.1:{config.listen.port}"
-        _execute_benchmark(
+        _execute_benchmark_v2(
             sieve_base_url=sieve_base_url,
             direct_base=direct_base,
             model_name=model_name,
+            grader_name=grader_name,
+            fixture=fixture,
             store=ms,
-            compare=compare,
+            turns=turns,
+            runs=runs,
             pricing=pricing,
             output_format=output_format,
             announce=announce,
             recall_grader=recall_grader,
             trap_grader=trap_grader,
-            run_benchmark=run_benchmark,
-            run_benchmark_compare=run_benchmark_compare,
-            render_summary=render_summary,
-            render_compare_summary=render_compare_summary,
-            render_markdown=render_markdown,
-            summary_to_dict=summary_to_dict,
+            context_window_warning=context_window_warning,
+            skipped_fixtures=skipped_fixtures,
         )
-    except Exception as exc:
-        console.print(f"[bold red]Benchmark failed:[/] {exc}")
+    finally:
         ms.close()
-        sys.exit(1)
-    ms.close()
 
 
 def main() -> None:

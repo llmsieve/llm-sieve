@@ -181,6 +181,37 @@ class BenchmarkSummary:
 
 
 @dataclass(frozen=True)
+class AggregatedStat:
+    """Mean ± sample stddev over N observations.
+
+    Skeptics read single-point benchmarks as marketing material. The
+    ±stddev notation is a tribal marker of seriousness — we report
+    both so a reader who cares about statistical significance can
+    judge for themselves whether the delta cleared the noise floor.
+    """
+    mean: float
+    stddev: float
+    n: int
+
+    @classmethod
+    def from_values(cls, values: list[float]) -> "AggregatedStat":
+        if not values:
+            return cls(mean=0.0, stddev=0.0, n=0)
+        n = len(values)
+        mean = sum(values) / n
+        if n < 2:
+            return cls(mean=mean, stddev=0.0, n=n)
+        variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+        return cls(mean=mean, stddev=variance ** 0.5, n=n)
+
+    def render(self, fmt: str = "{:,.0f}") -> str:
+        """Human-readable rendering, e.g. '14,581 ± 389' or '14,581'."""
+        if self.n <= 1 or self.stddev == 0:
+            return fmt.format(self.mean)
+        return f"{fmt.format(self.mean)} ± {fmt.format(self.stddev)}"
+
+
+@dataclass(frozen=True)
 class CompareSummary:
     """Two-pass summary: baseline (direct) vs Sieve (proxy)."""
 
@@ -519,6 +550,119 @@ def run_benchmark_compare(
     )
 
 
+@dataclass(frozen=True)
+class AggregatedCompareSummary:
+    """N runs of --compare aggregated with mean ± stddev per metric.
+
+    Surfaces the same metrics as CompareSummary but as AggregatedStat
+    bundles. The underlying per-run results are kept in ``runs`` so
+    downstream tooling can drill in if needed.
+    """
+
+    runs: list[CompareSummary]
+    baseline_tokens: AggregatedStat
+    sieve_outbound_tokens: AggregatedStat
+    tokens_saved: AggregatedStat
+    reduction_pct: AggregatedStat
+    baseline_wall_clock_s: AggregatedStat
+    sieve_wall_clock_s: AggregatedStat
+    # Correctness metrics — per-run values then consensus.
+    correct_recalls_per_run: list[int]
+    gradable_recalls: int
+    trap_absence_per_run: list[bool | None]
+    facts_learned_per_run: list[int]
+    # Context-window truncation finding. Populated by the CLI when a
+    # baseline inbound approaches or exceeds a known local-model
+    # ceiling; surfaced in the report's methodology section.
+    baseline_truncation_observed: bool = False
+
+    @property
+    def most_recent(self) -> CompareSummary:
+        """The last run — used where only point-in-time data is needed."""
+        return self.runs[-1]
+
+    @property
+    def all_recalls_perfect(self) -> bool:
+        if not self.correct_recalls_per_run or self.gradable_recalls == 0:
+            return False
+        return all(c == self.gradable_recalls for c in self.correct_recalls_per_run)
+
+    @property
+    def all_traps_refused(self) -> bool:
+        return bool(self.trap_absence_per_run) and all(
+            x is True for x in self.trap_absence_per_run
+        )
+
+
+def run_benchmark_compare_multi(
+    *,
+    runs: int = 3,
+    sieve_base_url: str,
+    direct_base_url: str,
+    model: str,
+    store_fact_count: Callable[[], int],
+    reset_store: Callable[[], None],
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 120.0,
+    messages: Iterable[dict] = BENCHMARK_MESSAGES,
+    stream: bool = True,
+    grade_recall: Callable[[int, str, str, str], bool | None] | None = None,
+    grade_trap: Callable[[str, str], bool] | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> AggregatedCompareSummary:
+    """Run ``--compare`` ``runs`` times and aggregate with mean ± stddev.
+
+    ``progress`` is an optional ``(run_index, total_runs, phase_label) ->
+    None`` callback invoked before each of the 2N passes so the CLI
+    can show progress. ``phase_label`` is 'baseline' or 'sieve'.
+    """
+    messages = list(messages)
+    per_run: list[CompareSummary] = []
+    for i in range(runs):
+        reset_store()
+        if progress:
+            progress(i + 1, runs, "baseline")
+        compare = run_benchmark_compare(
+            sieve_base_url=sieve_base_url,
+            direct_base_url=direct_base_url,
+            model=model,
+            store_fact_count=store_fact_count,
+            reset_store=reset_store,
+            transport=transport,
+            timeout=timeout,
+            messages=messages,
+            stream=stream,
+            grade_recall=grade_recall,
+            grade_trap=grade_trap,
+        )
+        per_run.append(compare)
+        if progress:
+            progress(i + 1, runs, "done")
+
+    baseline_vals = [float(r.baseline_tokens) for r in per_run]
+    sieve_out_vals = [float(r.sieve_outbound_tokens) for r in per_run]
+    saved_vals = [float(r.tokens_saved) for r in per_run]
+    pct_vals = [r.reduction_pct for r in per_run]
+    baseline_wall = [
+        sum(t.elapsed_s for t in r.baseline.turns) for r in per_run
+    ]
+    sieve_wall = [sum(t.elapsed_s for t in r.sieve.turns) for r in per_run]
+
+    return AggregatedCompareSummary(
+        runs=per_run,
+        baseline_tokens=AggregatedStat.from_values(baseline_vals),
+        sieve_outbound_tokens=AggregatedStat.from_values(sieve_out_vals),
+        tokens_saved=AggregatedStat.from_values(saved_vals),
+        reduction_pct=AggregatedStat.from_values(pct_vals),
+        baseline_wall_clock_s=AggregatedStat.from_values(baseline_wall),
+        sieve_wall_clock_s=AggregatedStat.from_values(sieve_wall),
+        correct_recalls_per_run=[r.sieve.correct_recalls for r in per_run],
+        gradable_recalls=per_run[0].sieve.gradable_recalls if per_run else 0,
+        trap_absence_per_run=[r.sieve.trap_absence_signal for r in per_run],
+        facts_learned_per_run=[r.sieve.facts_learned for r in per_run],
+    )
+
+
 # ── Rendering (rich) ─────────────────────────────────────────────────────
 
 
@@ -717,55 +861,80 @@ def _avg(values: list[float]) -> float:
 
 def build_headline(
     *,
+    aggregated: "AggregatedCompareSummary | None" = None,
     summary: CompareSummary | None = None,
     single: BenchmarkSummary | None = None,
     pricing_tier: str = "local",
+    model: str = "",
+    fixture: str = "",
 ) -> str:
-    """One-line marketing-ready summary.
+    """One-line, paste-ready summary — the shareable hyperfine-equivalent.
 
-    Used both in the CLI render and by ``--format json/markdown``.
-    Always plain text — no rich markup. Safe to paste into a README.
+    Reports what was measured, avoids adjectives. Safe for direct
+    copy-paste into a README, commit message, tweet, or Slack. No
+    rich markup. The aggregated variant includes ± stddev.
 
-    In compare mode:
-        "Sieve cut this agent's tokens by 63% (−15,241 tokens, saved
-         $0.23 on Claude Sonnet) while answering 6/6 recall questions
-         correctly."
-
-    In single mode:
+    Aggregated (preferred):
+        "Sieve sent 52% ± 3% fewer tokens (30,390 → 14,581) over
+         3 × 15-turn qwen3.5:9b conversations on the 'medium' fixture;
+         correct recalls 6/6; trap refused."
+    Compare (single run):
+        "Sieve sent 52% fewer tokens (30,390 → 14,581) over a 15-turn
+         qwen3.5:9b conversation on the 'medium' fixture; correct
+         recalls 6/6; trap refused."
+    Single-mode:
         "Sieve answered 6/6 recall questions correctly and refused on
-         the trap, using 8,979 tokens over 15 turns."
+         the trap over 15 turns."
     """
-    from sieve._pricing import dollars_saved, tier_label
+    if aggregated is not None:
+        pct = aggregated.reduction_pct
+        base = aggregated.baseline_tokens
+        sie = aggregated.sieve_outbound_tokens
+        runs_n = len(aggregated.runs)
+        turns_n = len(aggregated.runs[0].sieve.turns) if aggregated.runs else 0
+        recall_range = _recall_range(aggregated)
+        trap_str = (
+            "trap refused" if aggregated.all_traps_refused
+            else "trap mixed" if any(
+                x is True for x in aggregated.trap_absence_per_run
+            )
+            else "trap failed"
+        )
+        pct_str = (
+            f"{pct.mean:.0f}%" if pct.n <= 1 or pct.stddev == 0
+            else f"{pct.mean:.0f}% ± {pct.stddev:.0f}%"
+        )
+        fixture_str = f" on the '{fixture}' fixture" if fixture else ""
+        model_str = f" {model}" if model else ""
+        return (
+            f"Sieve sent {pct_str} fewer tokens "
+            f"({base.mean:,.0f} → {sie.mean:,.0f}) over "
+            f"{runs_n} × {turns_n}-turn{model_str} conversations"
+            f"{fixture_str}; "
+            f"correct recalls {recall_range}; {trap_str}."
+        )
 
     if summary is not None:
         saved = summary.tokens_saved
         pct = summary.reduction_pct
-        dollars = dollars_saved(saved, pricing_tier)
         recalls = (
             f"{summary.sieve.correct_recalls}/{summary.sieve.gradable_recalls}"
             if summary.sieve.gradable_recalls else "—"
         )
-        trap_mark = (
-            " and refused on the trap"
-            if summary.sieve.trap_absence_signal is True
-            else ""
+        trap_str = (
+            "trap refused" if summary.sieve.trap_absence_signal is True
+            else "trap failed" if summary.sieve.trap_absence_signal is False
+            else "trap not reached"
         )
-        parts: list[str] = []
-        if saved > 0:
-            parts.append(
-                f"Sieve cut this agent's tokens by {pct:.0f}% "
-                f"(−{saved:,} tokens"
-            )
-            if dollars > 0:
-                parts[-1] += f", saved ${dollars:.2f} on {tier_label(pricing_tier).split(' (')[0]}"
-            parts[-1] += ")"
-        else:
-            parts.append(f"Sieve added {-saved:,} tokens this run")
-        if summary.sieve.gradable_recalls:
-            parts.append(f"while answering {recalls} recall questions correctly")
-        parts.append(trap_mark.strip() if trap_mark.strip() else "")
-        text = " ".join(p for p in parts if p).rstrip(",. ") + "."
-        return text
+        fixture_str = f" on the '{fixture}' fixture" if fixture else ""
+        model_str = f" {model}" if model else ""
+        turns_n = len(summary.sieve.turns)
+        return (
+            f"Sieve sent {pct:.0f}% fewer tokens "
+            f"({summary.baseline_tokens:,} → {summary.sieve_outbound_tokens:,}) "
+            f"over a {turns_n}-turn{model_str} conversation{fixture_str}; "
+            f"correct recalls {recalls}; {trap_str}."
+        )
 
     if single is not None:
         recalls = (
@@ -774,16 +943,26 @@ def build_headline(
         )
         trap_mark = (
             " and refused on the trap"
-            if single.trap_absence_signal is True
-            else ""
+            if single.trap_absence_signal is True else ""
         )
         return (
             f"Sieve answered {recalls} recall questions correctly"
-            f"{trap_mark}, using {single.total_outbound:,} tokens "
-            f"over {len(single.turns)} turns."
+            f"{trap_mark} over {len(single.turns)} turns."
         )
 
     return ""
+
+
+def _recall_range(agg: "AggregatedCompareSummary") -> str:
+    """Render per-run recall counts as a compact range label."""
+    if not agg.correct_recalls_per_run or agg.gradable_recalls == 0:
+        return "—"
+    lo = min(agg.correct_recalls_per_run)
+    hi = max(agg.correct_recalls_per_run)
+    denom = agg.gradable_recalls
+    if lo == hi:
+        return f"{hi}/{denom}" + (" (all runs)" if len(agg.runs) > 1 else "")
+    return f"{lo}/{denom}–{hi}/{denom} across runs"
 
 
 def render_compare_summary(
@@ -971,6 +1150,254 @@ def render_compare_summary(
     )
 
 
+def render_aggregated_compare_summary(
+    agg: AggregatedCompareSummary,
+    *,
+    model: str,
+    grader_model: str,
+    fixture: str,
+    sieve_base_url: str,
+    direct_base_url: str,
+    console,
+    pricing_tier: str = "local",
+    turns_per_run: int | None = None,
+    context_window_warning: str | None = None,
+    skipped_fixtures: list[str] | None = None,
+) -> None:
+    """Skeptic-tuned render: methodology first, results second, limitations
+    visible, repro command at the end, shareable closing line.
+
+    Hierarchy mirrors the research findings: Cloudflare "Benchmarks are
+    hard" + hyperfine "Summary" + ripgrep "biased author" disclosure.
+    Nothing here is marketing copy. Adjectives are barred.
+    """
+    from rich.table import Table
+    from rich.panel import Panel
+    from sieve._pricing import dollars_saved, price_for, tier_label
+    from sieve._agent_fixture import fixture_description
+
+    if not agg.runs:
+        console.print("[red]No runs completed.[/]")
+        return
+
+    runs_n = len(agg.runs)
+    turns_n = turns_per_run or len(agg.runs[0].sieve.turns)
+
+    # ── Run banner — self-identifying for a screenshot ──────────────
+    banner = (
+        f"[bold]Sieve benchmark[/]  "
+        f"{runs_n} × {turns_n} turns  ·  fixture: [cyan]{fixture}[/] "
+        f"({fixture_description(fixture)})  ·  model: [cyan]{model}[/]  "
+        f"·  grader: [cyan]{grader_model}[/]"
+    )
+    console.print(banner)
+    if pricing_tier and pricing_tier != "local":
+        console.print(
+            f"[dim]Pricing tier for cost panel: {tier_label(pricing_tier)}[/]"
+        )
+    console.print()
+
+    # ── Methodology ────────────────────────────────────────────────
+    grader_note = (
+        " [yellow](self-grading)[/]"
+        if grader_model == model
+        else " (independent)"
+    )
+    meth_lines = [
+        "• [bold]Script:[/] 15-turn conversation "
+        "(3 intros → 5 recalls → 4 deep follow-ups → 2 updates → 1 trap)",
+        f"• [bold]Baseline pass:[/] each turn POSTed directly to "
+        f"[cyan]{direct_base_url}[/] with the '{fixture}' agent payload",
+        f"• [bold]Sieve pass:[/] same payload → Sieve proxy at "
+        f"[cyan]{sieve_base_url}[/] → same endpoint",
+        f"• [bold]Grading:[/] recall + trap answered by "
+        f"[cyan]{grader_model}[/] at temperature 0{grader_note}",
+        f"• [bold]Runs:[/] {runs_n} full scripts, mean ± sample stddev reported",
+        "• [bold]Latency:[/] not reported as a headline metric — depends on "
+        "model, hardware, and network, none of which Sieve controls",
+    ]
+    console.print(
+        Panel("\n".join(meth_lines), title="Methodology", border_style="dim")
+    )
+
+    # ── Results table ──────────────────────────────────────────────
+    results = Table(title="Results  (mean ± stddev)", show_lines=False)
+    results.add_column("Metric")
+    results.add_column("Baseline (direct)", justify="right")
+    results.add_column("With Sieve", justify="right")
+    results.add_column("Δ", justify="right")
+
+    base_tok = agg.baseline_tokens.render()
+    sie_tok = agg.sieve_outbound_tokens.render()
+    saved_mean = agg.tokens_saved.mean
+    pct_mean = agg.reduction_pct.mean
+    pct_std = agg.reduction_pct.stddev
+    pct_str = (
+        f"−{pct_mean:.0f}%" if runs_n <= 1 or pct_std == 0
+        else f"−{pct_mean:.0f}% ± {pct_std:.0f}%"
+    )
+    results.add_row(
+        "Tokens sent to LLM / run",
+        base_tok,
+        sie_tok,
+        f"[bold green]{pct_str}[/] ([green]−{saved_mean:,.0f}[/])",
+    )
+    results.add_row(
+        "Correct recalls  (Sieve)",
+        "—",
+        _recall_range(agg),
+        "",
+    )
+    trap_cell = (
+        "[green]refused ✓[/]" if agg.all_traps_refused
+        else "[red]failed ✗[/]" if any(
+            x is False for x in agg.trap_absence_per_run
+        ) else "[yellow]mixed[/]"
+    )
+    results.add_row(
+        "Trap question  (Sieve)",
+        "—",
+        trap_cell,
+        "",
+    )
+    facts_lo = min(agg.facts_learned_per_run)
+    facts_hi = max(agg.facts_learned_per_run)
+    facts_cell = (
+        f"{facts_hi}" if facts_lo == facts_hi
+        else f"{facts_lo}–{facts_hi}"
+    )
+    results.add_row(
+        "Facts learned  (Sieve)",
+        "—",
+        facts_cell,
+        "",
+    )
+    console.print(results)
+
+    # ── Cost panel (paid pricing tier only) ────────────────────────
+    if price_for(pricing_tier) > 0 and saved_mean > 0:
+        saved_usd = dollars_saved(saved_mean, pricing_tier)
+        saved_1k = saved_usd * 1000
+        console.print(
+            Panel(
+                "\n".join([
+                    f"[bold]Per run:[/]     "
+                    f"saved [green]${saved_usd:,.4f}[/] @ {tier_label(pricing_tier)}",
+                    f"[bold]Per 1K runs:[/] [green]${saved_1k:,.2f}[/]",
+                    "",
+                    "[dim]Based on input-token pricing only. Response-token "
+                    "costs are identical in both passes. Multiply by your "
+                    "own conversation count to extrapolate.[/]",
+                ]),
+                title="What this means per run",
+                border_style="dim",
+            )
+        )
+
+    # ── Trade-offs — named explicitly to inoculate against rebuttal ──
+    sieve_wall = agg.sieve_wall_clock_s.mean
+    base_wall = agg.baseline_wall_clock_s.mean
+    tradeoff_lines: list[str] = []
+    if sieve_wall > base_wall:
+        delta = sieve_wall - base_wall
+        tradeoff_lines.append(
+            f"• Wall-clock overhead on this run: [yellow]+{delta:.1f}s total[/] "
+            f"(baseline {base_wall:.1f}s, Sieve {sieve_wall:.1f}s)"
+        )
+        tradeoff_lines.append(
+            "  This is retrieval + recall-tool overhead. On cloud models "
+            "(Sonnet, GPT-4o) the smaller payload is generation-bound, "
+            "typically making Sieve faster end-to-end. Not measured here."
+        )
+    if agg.baseline_truncation_observed:
+        tradeoff_lines.append(
+            "• [yellow]Baseline truncation observed[/] — the baseline "
+            "payload exceeded the model's context window on one or more "
+            "turns. Sieve compressed it to fit."
+        )
+    if tradeoff_lines:
+        console.print(
+            Panel(
+                "\n".join(tradeoff_lines),
+                title="Trade-offs",
+                border_style="yellow",
+            )
+        )
+
+    # ── Known limitations ─────────────────────────────────────────
+    lim_lines = [
+        f"• Single fixture size: '{fixture}'. Re-run with "
+        f"[cyan]--fixture {{small|medium|large|xlarge}}[/] to test other "
+        f"payload shapes.",
+        f"• Recall grading by [cyan]{grader_model}[/]"
+        + (
+            " — same model as the one being tested. Skeptics flag this as "
+            "self-grading. Re-run with [cyan]--grader-model[/] for "
+            "independent scoring."
+            if grader_model == model
+            else "."
+        ),
+        f"• Script is fixed and {turns_n} turns long. Longer conversations "
+        f"test different behaviour; see [cyan]--turns[/].",
+        f"• {runs_n} runs gives {'point-in-time results' if runs_n == 1 else 'a stddev estimate'}"
+        f"; increase [cyan]--runs[/] for tighter confidence.",
+    ]
+    if skipped_fixtures:
+        lim_lines.append(
+            f"• User-excluded fixtures this run: "
+            f"{', '.join(skipped_fixtures)} (context-window concern)."
+        )
+    if context_window_warning:
+        lim_lines.append(f"• {context_window_warning}")
+    console.print(
+        Panel(
+            "\n".join(lim_lines),
+            title="Known limitations",
+            border_style="dim",
+        )
+    )
+
+    # ── Reproduce line ─────────────────────────────────────────────
+    import hashlib
+    from sieve._agent_fixture import fixture_approx_tokens
+    sig = hashlib.sha256(
+        f"{fixture}|{model}|{grader_model}|{turns_n}|{runs_n}|{pricing_tier}".encode()
+    ).hexdigest()[:12]
+    repro_cmd = (
+        f"sieve benchmark --fixture {fixture} --model {model} "
+        f"--grader-model {grader_model} --turns {turns_n} --runs {runs_n} "
+        f"--pricing {pricing_tier}"
+    )
+    repro_lines = [
+        f"[bold]Command:[/] [cyan]{repro_cmd}[/]",
+        f"[bold]Fixture baseline tokens:[/] ~{fixture_approx_tokens(fixture):,} "
+        f"(+ tool schemas + growing history)",
+        f"[bold]Config signature:[/] {sig}",
+    ]
+    try:
+        from importlib.metadata import version as _pkgver
+        repro_lines.append(f"[bold]Sieve version:[/] {_pkgver('llm-sieve')}")
+    except Exception:
+        pass
+    console.print(
+        Panel(
+            "\n".join(repro_lines),
+            title="Reproduce",
+            border_style="dim",
+        )
+    )
+
+    # ── Shareable closing line (the hyperfine pattern) ─────────────
+    headline = build_headline(
+        aggregated=agg, pricing_tier=pricing_tier, model=model, fixture=fixture,
+    )
+    sep = "─" * min(console.width if hasattr(console, "width") else 80, 80)
+    console.print()
+    console.print(f"[dim]{sep}[/]")
+    console.print(f"[bold]{headline}[/]")
+    console.print(f"[dim]{sep}[/]")
+
+
 def _turn_verdict_mark(t: TurnResult) -> str:
     """Compact ✓/✗ marker for a turn's grading outcome."""
     if t.phase == "trap":
@@ -1077,6 +1504,271 @@ def summary_to_dict(
         "headline": build_headline(single=summary),
         "turns": [_turn_dict(t) for t in summary.turns],
     }
+
+
+def render_aggregated_markdown(
+    agg: AggregatedCompareSummary,
+    *,
+    model: str,
+    grader_model: str,
+    fixture: str,
+    sieve_base_url: str,
+    direct_base_url: str,
+    pricing_tier: str = "local",
+    turns_per_run: int | None = None,
+    skipped_fixtures: list[str] | None = None,
+    context_window_warning: str | None = None,
+) -> str:
+    """Shareable markdown report following the same hierarchy as the
+    terminal render: banner → methodology → results → limitations →
+    reproduce → raw data.
+
+    Designed to paste directly into a GitHub issue, Slack message, or
+    README. No adjectives. No sales pitch. The closing line (the
+    hyperfine-equivalent) is first so it's visible in message previews.
+    """
+    import hashlib
+    from sieve._pricing import dollars_saved, price_for, tier_label
+    from sieve._agent_fixture import fixture_approx_tokens, fixture_description
+
+    if not agg.runs:
+        return "_No benchmark runs completed._\n"
+
+    runs_n = len(agg.runs)
+    turns_n = turns_per_run or len(agg.runs[0].sieve.turns)
+    headline = build_headline(
+        aggregated=agg, pricing_tier=pricing_tier, model=model, fixture=fixture,
+    )
+    sig = hashlib.sha256(
+        f"{fixture}|{model}|{grader_model}|{turns_n}|{runs_n}|{pricing_tier}".encode()
+    ).hexdigest()[:12]
+    try:
+        from importlib.metadata import version as _pkgver
+        sieve_version = _pkgver("llm-sieve")
+    except Exception:
+        sieve_version = "unknown"
+
+    lines: list[str] = []
+    lines.append(f"# Sieve benchmark — {fixture} fixture — {model}")
+    lines.append("")
+    lines.append(f"> {headline}")
+    lines.append("")
+
+    # ── Methodology ────────────────────────────────────────────────
+    lines.append("## Methodology")
+    lines.append("")
+    lines.append(
+        "- **Script:** 15-turn conversation "
+        "(3 intros → 5 recalls → 4 deep follow-ups → 2 updates → 1 trap)"
+    )
+    lines.append(
+        f"- **Baseline pass:** each turn POSTed directly to "
+        f"`{direct_base_url}` with the '{fixture}' agent payload "
+        f"({fixture_description(fixture)})"
+    )
+    lines.append(
+        f"- **Sieve pass:** same payload → Sieve proxy at "
+        f"`{sieve_base_url}` → same endpoint"
+    )
+    grader_note = (
+        " **⚠ self-grading — same model as the one being tested**"
+        if grader_model == model else ""
+    )
+    lines.append(
+        f"- **Grading:** recall and trap verdicts by `{grader_model}` "
+        f"at temperature 0.{grader_note}"
+    )
+    lines.append(
+        f"- **Runs:** {runs_n} full 15-turn scripts. "
+        f"Mean ± sample stddev reported below."
+    )
+    lines.append(
+        "- **Latency:** wall-clock is included in raw data but not "
+        "reported as a headline — it depends on model, hardware, and "
+        "network, none of which Sieve controls."
+    )
+    lines.append("")
+
+    # ── Results table ──────────────────────────────────────────────
+    lines.append("## Results")
+    lines.append("")
+    lines.append("| Metric | Baseline (direct) | With Sieve | Δ |")
+    lines.append("|---|---:|---:|---:|")
+    base_tok = agg.baseline_tokens.render()
+    sie_tok = agg.sieve_outbound_tokens.render()
+    pct_mean = agg.reduction_pct.mean
+    pct_std = agg.reduction_pct.stddev
+    pct_str = (
+        f"−{pct_mean:.0f}%" if runs_n <= 1 or pct_std == 0
+        else f"−{pct_mean:.0f}% ± {pct_std:.0f}%"
+    )
+    saved_mean = agg.tokens_saved.mean
+    lines.append(
+        f"| **Tokens sent to LLM / run** | {base_tok} | {sie_tok} | "
+        f"**{pct_str}** (−{saved_mean:,.0f}) |"
+    )
+    lines.append(
+        f"| Correct recalls (Sieve) | — | {_recall_range(agg)} | — |"
+    )
+    trap_cell = (
+        "refused ✓" if agg.all_traps_refused
+        else "failed ✗" if any(x is False for x in agg.trap_absence_per_run)
+        else "mixed"
+    )
+    lines.append(
+        f"| Trap question (Sieve) | — | {trap_cell} | — |"
+    )
+    facts_lo = min(agg.facts_learned_per_run)
+    facts_hi = max(agg.facts_learned_per_run)
+    facts_cell = f"{facts_hi}" if facts_lo == facts_hi else f"{facts_lo}–{facts_hi}"
+    lines.append(
+        f"| Facts learned (Sieve) | — | {facts_cell} | — |"
+    )
+    lines.append("")
+
+    # ── Cost panel ─────────────────────────────────────────────────
+    if price_for(pricing_tier) > 0 and saved_mean > 0:
+        per_run = dollars_saved(saved_mean, pricing_tier)
+        per_k = per_run * 1000
+        lines.append("### What this means per run")
+        lines.append("")
+        lines.append(
+            f"At {tier_label(pricing_tier)}: saved **${per_run:,.4f}** per "
+            f"run ({pct_mean:.0f}% of input-token cost). Extrapolated, "
+            f"that's **${per_k:,.2f}** per 1K runs at the same scale."
+        )
+        lines.append("")
+        lines.append(
+            "> Input-token pricing only; response tokens are identical "
+            "in both passes. Multiply by your actual conversation count."
+        )
+        lines.append("")
+
+    # ── Trade-offs ─────────────────────────────────────────────────
+    sieve_wall = agg.sieve_wall_clock_s.mean
+    base_wall = agg.baseline_wall_clock_s.mean
+    tradeoffs: list[str] = []
+    if sieve_wall > base_wall:
+        delta = sieve_wall - base_wall
+        tradeoffs.append(
+            f"- Wall-clock overhead on this run: +{delta:.1f}s total "
+            f"(baseline {base_wall:.1f}s, Sieve {sieve_wall:.1f}s). "
+            "This is retrieval + recall-tool overhead. On cloud models "
+            "where payload size dominates generation time, Sieve is "
+            "typically faster end-to-end. Not measured here."
+        )
+    if agg.baseline_truncation_observed:
+        tradeoffs.append(
+            "- **Baseline truncation observed:** the baseline payload "
+            "exceeded the model's context window on one or more turns. "
+            "Sieve compressed it to fit."
+        )
+    if tradeoffs:
+        lines.append("## Trade-offs")
+        lines.append("")
+        lines.extend(tradeoffs)
+        lines.append("")
+
+    # ── Known limitations ─────────────────────────────────────────
+    lines.append("## Known limitations")
+    lines.append("")
+    lines.append(
+        f"- Single fixture size: `{fixture}` "
+        f"(~{fixture_approx_tokens(fixture):,} tokens base payload). "
+        "Heavier agents see larger reductions. Re-run with "
+        "`--fixture large` or `--fixture xlarge` to test."
+    )
+    if grader_model == model:
+        lines.append(
+            "- **Recall grading by the same model being tested.** "
+            "Skeptics correctly flag this as a potential bias source. "
+            "Pass `--grader-model` for independent scoring."
+        )
+    else:
+        lines.append(
+            f"- Recall grading by `{grader_model}` (independent of "
+            "the test model)."
+        )
+    lines.append(
+        f"- Script is fixed and {turns_n} turns long. Longer "
+        "conversations test different behaviour; see `--turns`."
+    )
+    if runs_n <= 1:
+        lines.append(
+            "- Only one run. No stddev estimate is available. "
+            "Re-run with `--runs 3` or higher for tighter confidence."
+        )
+    else:
+        lines.append(
+            f"- {runs_n} runs gives a stddev estimate. Increase `--runs` "
+            "for tighter confidence intervals."
+        )
+    if skipped_fixtures:
+        lines.append(
+            f"- User excluded these fixtures from this run: "
+            f"{', '.join(skipped_fixtures)} (context-window concern)."
+        )
+    if context_window_warning:
+        lines.append(f"- {context_window_warning}")
+    lines.append("")
+
+    # ── Reproducibility ───────────────────────────────────────────
+    lines.append("## Reproduce")
+    lines.append("")
+    lines.append("```")
+    lines.append(
+        f"sieve benchmark --fixture {fixture} --model {model} "
+        f"--grader-model {grader_model} --turns {turns_n} --runs {runs_n} "
+        f"--pricing {pricing_tier}"
+    )
+    lines.append("```")
+    lines.append("")
+    lines.append(f"- Config signature: `{sig}`")
+    lines.append(f"- Sieve version: `{sieve_version}`")
+    lines.append("")
+
+    # ── Raw data (collapsed) ──────────────────────────────────────
+    lines.append("<details>")
+    lines.append("<summary>Raw data — per-turn results (last run)</summary>")
+    lines.append("")
+    last = agg.most_recent
+    lines.append(
+        "| # | Phase | Prompt | Baseline tokens | Sieve tokens | "
+        "Baseline verdict | Sieve verdict |"
+    )
+    lines.append("|---:|---|---|---:|---:|:---:|:---:|")
+    def _mk(t: TurnResult) -> str:
+        if t.phase == "trap":
+            if t.absence_signal is True: return "refused ✓"
+            if t.absence_signal is False: return "fabricated ✗"
+            return "—"
+        if t.correct_recall is True: return "✓"
+        if t.correct_recall is False: return "✗"
+        return "—"
+    for b, s in zip(last.baseline.turns, last.sieve.turns):
+        prompt_md = b.prompt.replace("|", "\\|").replace("\n", " ")
+        lines.append(
+            f"| {b.index} | {b.phase} | {prompt_md} | "
+            f"{b.inbound_tokens:,} | {s.outbound_tokens:,} | "
+            f"{_mk(b)} | {_mk(s)} |"
+        )
+    lines.append("")
+    # Trap transcript — showing the refusal is more persuasive than
+    # claiming it (research: ripgrep-style "show your work").
+    trap_turn = next(
+        (t for t in last.sieve.turns if t.phase == "trap"), None
+    )
+    if trap_turn and trap_turn.response:
+        lines.append("**Trap transcript (Sieve):**")
+        lines.append("")
+        lines.append(f"> **Q:** {trap_turn.prompt}")
+        lines.append(">")
+        lines.append(f"> **A:** {trap_turn.response}")
+        lines.append("")
+    lines.append("</details>")
+    lines.append("")
+
+    return "\n".join(lines)
 
 
 def render_markdown(

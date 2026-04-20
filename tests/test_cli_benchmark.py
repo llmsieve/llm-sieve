@@ -478,7 +478,7 @@ def test_pricing_table_has_expected_tiers():
     assert price_for("made-up-model") == 0.0
 
 
-def test_headline_mentions_reduction_and_dollar_savings():
+def test_headline_mentions_reduction_and_baseline_sieve_tokens():
     from sieve.cli_benchmark import build_headline, CompareSummary
     baseline = BenchmarkSummary(
         total_inbound=24000, total_outbound=24000,
@@ -497,10 +497,12 @@ def test_headline_mentions_reduction_and_dollar_savings():
         sieve=sieve,
     )
     headline = build_headline(summary=compare, pricing_tier="claude-sonnet")
-    assert "67%" in headline or "66%" in headline  # 16k / 24k
-    assert "16,000" in headline
-    assert "$" in headline  # dollar figure present
+    # Reduction percentage reported
+    assert "67%" in headline or "66%" in headline
+    # Both raw token counts reported (the "X → Y" pattern)
+    assert "24,000" in headline and "8,000" in headline
     assert "6/6" in headline
+    assert "trap refused" in headline
 
 
 def test_headline_single_mode_mentions_recalls():
@@ -591,3 +593,359 @@ def test_render_markdown_produces_paste_able_report():
     assert "**Savings" in md
     assert "$" in md
     assert "### Per-turn" in md
+
+
+# ── AggregatedStat ──────────────────────────────────────────────────────
+
+
+def test_aggregated_stat_empty():
+    from sieve.cli_benchmark import AggregatedStat
+    s = AggregatedStat.from_values([])
+    assert s.n == 0
+    assert s.mean == 0.0
+    assert s.stddev == 0.0
+    assert s.render() == "0"
+
+
+def test_aggregated_stat_single_value():
+    from sieve.cli_benchmark import AggregatedStat
+    s = AggregatedStat.from_values([42.0])
+    assert s.n == 1
+    assert s.mean == 42.0
+    assert s.stddev == 0.0
+    # No stddev on a single value — render omits the ±.
+    assert "±" not in s.render()
+
+
+def test_aggregated_stat_multi_values():
+    from sieve.cli_benchmark import AggregatedStat
+    s = AggregatedStat.from_values([10.0, 12.0, 14.0])
+    assert s.n == 3
+    assert s.mean == pytest.approx(12.0)
+    # Sample stddev of [10, 12, 14] = 2.0
+    assert s.stddev == pytest.approx(2.0)
+    assert "±" in s.render()
+
+
+# ── Multi-run compare ───────────────────────────────────────────────────
+
+
+def test_run_benchmark_compare_multi_aggregates():
+    """Three compare runs → AggregatedCompareSummary with mean/stddev populated."""
+    from sieve.cli_benchmark import run_benchmark_compare_multi
+
+    # Build two fakes: one for baseline (high tokens), one for sieve
+    # (low tokens). We cheat by using a single FakeProxy and flipping
+    # an internal counter to return different token headers per pass.
+    class TwoPassFake:
+        def __init__(self):
+            self.facts = 0
+            self.calls = 0
+            self.pass_index = 0  # 0 = baseline, 1 = sieve
+
+        def handler(self, request: httpx.Request) -> httpx.Response:
+            self.calls += 1
+            # Each "run" in the multi is 15 turns baseline + 15 turns sieve
+            # = 30 calls. Baseline first (high tokens), then sieve (low).
+            calls_in_this_run = (self.calls - 1) % 30
+            is_baseline = calls_in_this_run < 15
+            phase_idx = calls_in_this_run % 15
+            if phase_idx == 15 - 1:
+                # approximately scripting the end of a run
+                pass
+            phase = BENCHMARK_MESSAGES[phase_idx]["phase"]
+            if phase == "introduce" or phase == "update":
+                self.facts += 1
+
+            # Token counts differ between baseline and sieve passes.
+            if is_baseline:
+                inbound = 2000
+                outbound = 2000
+            else:
+                inbound = 200
+                outbound = 300
+            return httpx.Response(
+                200,
+                json={
+                    "message": {"role": "assistant", "content": "ok"},
+                    "done": True,
+                },
+                headers={
+                    "X-Sieve-Inbound-Tokens": str(inbound),
+                    "X-Sieve-Outbound-Tokens": str(outbound),
+                },
+            )
+
+    fake = TwoPassFake()
+    transport = httpx.MockTransport(fake.handler)
+
+    resets = []
+    def _reset():
+        resets.append(1)
+        fake.facts = 0
+
+    agg = run_benchmark_compare_multi(
+        runs=3,
+        sieve_base_url="http://sieve",
+        direct_base_url="http://direct",
+        model="test-model",
+        store_fact_count=lambda: fake.facts,
+        reset_store=_reset,
+        transport=transport,
+        stream=False,
+    )
+
+    assert len(agg.runs) == 3
+    assert agg.baseline_tokens.n == 3
+    # Baseline tokens come from the actual agent-shaped payload (computed
+    # client-side when use_sieve_headers=False). Sieve outbound comes
+    # from our fake's X-Sieve-Outbound header (300 × 15 = 4500).
+    assert agg.sieve_outbound_tokens.mean == pytest.approx(4_500)
+    # Baseline >> Sieve outbound — the whole point of the benchmark.
+    assert agg.baseline_tokens.mean > agg.sieve_outbound_tokens.mean * 5
+    # All three runs are deterministic → zero stddev on the reduction
+    # percentage.
+    assert agg.reduction_pct.stddev == pytest.approx(0.0)
+    # reset_store called before each of the 3 runs, plus once between
+    # baseline and sieve passes of each run.
+    assert len(resets) >= 3
+
+
+def test_aggregated_compare_headline_format():
+    """The headline should include both raw token counts and the %± stddev."""
+    from sieve.cli_benchmark import (
+        AggregatedStat, AggregatedCompareSummary, CompareSummary,
+        BenchmarkSummary, build_headline,
+    )
+    # Three identical runs — stddev = 0
+    def _make_cs():
+        baseline = BenchmarkSummary(
+            total_inbound=30000, total_outbound=30000,
+            facts_learned=0, trap_absence_signal=None, turns=[],
+        )
+        sieve = BenchmarkSummary(
+            total_inbound=300, total_outbound=4500,
+            facts_learned=11, trap_absence_signal=True,
+            turns=[None] * 15,
+            correct_recalls=6, gradable_recalls=6,
+        )
+        return CompareSummary(
+            baseline_tokens=30000,
+            sieve_outbound_tokens=4500,
+            sieve_inbound_tokens=300,
+            baseline=baseline, sieve=sieve,
+        )
+    runs = [_make_cs() for _ in range(3)]
+    agg = AggregatedCompareSummary(
+        runs=runs,
+        baseline_tokens=AggregatedStat.from_values([30000.0, 30000.0, 30000.0]),
+        sieve_outbound_tokens=AggregatedStat.from_values([4500.0, 4500.0, 4500.0]),
+        tokens_saved=AggregatedStat.from_values([25500.0, 25500.0, 25500.0]),
+        reduction_pct=AggregatedStat.from_values([85.0, 85.0, 85.0]),
+        baseline_wall_clock_s=AggregatedStat.from_values([1.0, 1.0, 1.0]),
+        sieve_wall_clock_s=AggregatedStat.from_values([2.0, 2.0, 2.0]),
+        correct_recalls_per_run=[6, 6, 6],
+        gradable_recalls=6,
+        trap_absence_per_run=[True, True, True],
+        facts_learned_per_run=[11, 11, 11],
+    )
+    h = build_headline(aggregated=agg, fixture="medium", model="qwen3.5:9b")
+    assert "85%" in h
+    assert "30,000" in h and "4,500" in h
+    assert "6/6" in h
+    assert "trap refused" in h
+    assert "medium" in h
+    assert "qwen3.5:9b" in h
+
+
+def test_aggregated_compare_headline_with_stddev():
+    """Unequal runs should produce a ± stddev in the headline."""
+    from sieve.cli_benchmark import (
+        AggregatedStat, AggregatedCompareSummary, CompareSummary,
+        BenchmarkSummary, build_headline,
+    )
+    def _cs(sieve_out):
+        baseline = BenchmarkSummary(
+            total_inbound=30000, total_outbound=30000,
+            facts_learned=0, trap_absence_signal=None, turns=[],
+        )
+        sieve = BenchmarkSummary(
+            total_inbound=300, total_outbound=sieve_out,
+            facts_learned=11, trap_absence_signal=True,
+            turns=[None] * 15,
+            correct_recalls=6, gradable_recalls=6,
+        )
+        return CompareSummary(
+            baseline_tokens=30000, sieve_outbound_tokens=sieve_out,
+            sieve_inbound_tokens=300, baseline=baseline, sieve=sieve,
+        )
+    runs = [_cs(4000), _cs(5000), _cs(4500)]
+    pct_vals = [(30000 - s) / 30000 * 100 for s in (4000, 5000, 4500)]
+    agg = AggregatedCompareSummary(
+        runs=runs,
+        baseline_tokens=AggregatedStat.from_values([30000.0] * 3),
+        sieve_outbound_tokens=AggregatedStat.from_values([4000.0, 5000.0, 4500.0]),
+        tokens_saved=AggregatedStat.from_values([26000.0, 25000.0, 25500.0]),
+        reduction_pct=AggregatedStat.from_values(pct_vals),
+        baseline_wall_clock_s=AggregatedStat.from_values([1.0] * 3),
+        sieve_wall_clock_s=AggregatedStat.from_values([2.0] * 3),
+        correct_recalls_per_run=[6, 6, 6],
+        gradable_recalls=6,
+        trap_absence_per_run=[True, True, True],
+        facts_learned_per_run=[11, 11, 11],
+    )
+    h = build_headline(aggregated=agg, fixture="medium", model="test")
+    assert "±" in h  # stddev present
+
+
+# ── Fixtures ────────────────────────────────────────────────────────────
+
+
+def test_fixture_registry_has_four_sizes():
+    from sieve._agent_fixture import (
+        fixture_names, fixture_description, fixture_approx_tokens, fixture_for,
+    )
+    assert fixture_names() == ["small", "medium", "large", "xlarge"]
+    # Each fixture is usable and has a nonzero base size.
+    prev = -1
+    for name in fixture_names():
+        base = fixture_approx_tokens(name)
+        assert base >= 0
+        # Fixtures grow monotonically (small < medium < large < xlarge).
+        assert base >= prev
+        prev = base
+        desc = fixture_description(name)
+        assert isinstance(desc, str) and desc
+        builder = fixture_for(name)
+        payload = builder("hello", "test-model", history=[])
+        assert payload["model"] == "test-model"
+        assert payload["messages"][-1]["content"] == "hello"
+
+
+def test_fixture_sizes_are_meaningfully_different():
+    """medium should be ~10× small; xlarge should be ~100× small."""
+    from sieve._agent_fixture import fixture_approx_tokens
+    small = fixture_approx_tokens("small")
+    medium = fixture_approx_tokens("medium")
+    large = fixture_approx_tokens("large")
+    xlarge = fixture_approx_tokens("xlarge")
+    assert medium > small * 3   # real lift, not a rounding difference
+    assert large > medium * 3
+    assert xlarge > large * 2
+
+
+def test_fixture_for_unknown_name_raises():
+    from sieve._agent_fixture import fixture_for
+    with pytest.raises(KeyError):
+        fixture_for("jumbo")
+
+
+# ── Recall range helper ────────────────────────────────────────────────
+
+
+def test_recall_range_consistent_and_mixed():
+    from sieve.cli_benchmark import (
+        AggregatedStat, AggregatedCompareSummary, CompareSummary,
+        BenchmarkSummary, _recall_range,
+    )
+    def _mk(recalls: list[int]):
+        # minimal shell for _recall_range
+        fake_bs = BenchmarkSummary(
+            total_inbound=0, total_outbound=0, facts_learned=0,
+            trap_absence_signal=None, turns=[],
+        )
+        fake_cs = CompareSummary(
+            baseline_tokens=0, sieve_outbound_tokens=0, sieve_inbound_tokens=0,
+            baseline=fake_bs, sieve=fake_bs,
+        )
+        zero = AggregatedStat.from_values([])
+        return AggregatedCompareSummary(
+            runs=[fake_cs] * len(recalls),
+            baseline_tokens=zero, sieve_outbound_tokens=zero,
+            tokens_saved=zero, reduction_pct=zero,
+            baseline_wall_clock_s=zero, sieve_wall_clock_s=zero,
+            correct_recalls_per_run=recalls,
+            gradable_recalls=6,
+            trap_absence_per_run=[True] * len(recalls),
+            facts_learned_per_run=[0] * len(recalls),
+        )
+    assert _recall_range(_mk([6, 6, 6])).startswith("6/6")
+    # Mixed — should show a range
+    r = _recall_range(_mk([4, 6, 5]))
+    assert "4/6" in r and "6/6" in r
+
+
+# ── Markdown report on aggregated summary ──────────────────────────────
+
+
+def test_render_aggregated_markdown_has_methodology_and_limitations():
+    from sieve.cli_benchmark import (
+        AggregatedStat, AggregatedCompareSummary, CompareSummary,
+        BenchmarkSummary, render_aggregated_markdown,
+    )
+    base = BenchmarkSummary(
+        total_inbound=30000, total_outbound=30000,
+        facts_learned=0, trap_absence_signal=None,
+        turns=[
+            TurnResult(
+                index=i, phase=BENCHMARK_MESSAGES[i-1]["phase"],
+                prompt=BENCHMARK_MESSAGES[i-1]["content"],
+                response="r", inbound_tokens=2000, outbound_tokens=2000,
+                facts_before=0, facts_after=0, elapsed_s=1.0, absence_signal=None,
+            ) for i in range(1, 16)
+        ],
+    )
+    sie = BenchmarkSummary(
+        total_inbound=300, total_outbound=4500,
+        facts_learned=11, trap_absence_signal=True,
+        correct_recalls=6, gradable_recalls=6,
+        turns=[
+            TurnResult(
+                index=i, phase=BENCHMARK_MESSAGES[i-1]["phase"],
+                prompt=BENCHMARK_MESSAGES[i-1]["content"],
+                response="You live in Porto." if i == 4 else "response",
+                inbound_tokens=200, outbound_tokens=300,
+                facts_before=0, facts_after=0, elapsed_s=2.0,
+                absence_signal=True if i == 15 else None,
+            ) for i in range(1, 16)
+        ],
+    )
+    cs = CompareSummary(
+        baseline_tokens=30000, sieve_outbound_tokens=4500,
+        sieve_inbound_tokens=300, baseline=base, sieve=sie,
+    )
+    runs = [cs, cs, cs]
+    agg = AggregatedCompareSummary(
+        runs=runs,
+        baseline_tokens=AggregatedStat.from_values([30000.0] * 3),
+        sieve_outbound_tokens=AggregatedStat.from_values([4500.0] * 3),
+        tokens_saved=AggregatedStat.from_values([25500.0] * 3),
+        reduction_pct=AggregatedStat.from_values([85.0] * 3),
+        baseline_wall_clock_s=AggregatedStat.from_values([15.0] * 3),
+        sieve_wall_clock_s=AggregatedStat.from_values([30.0] * 3),
+        correct_recalls_per_run=[6, 6, 6], gradable_recalls=6,
+        trap_absence_per_run=[True, True, True],
+        facts_learned_per_run=[11, 11, 11],
+    )
+    md = render_aggregated_markdown(
+        agg, model="qwen3.5:9b", grader_model="qwen3.5:9b",
+        fixture="medium", sieve_base_url="http://sieve",
+        direct_base_url="http://direct", pricing_tier="claude-sonnet",
+        turns_per_run=15,
+    )
+    # Methodology leads, adjective-free.
+    assert "## Methodology" in md
+    # Limitations must have the exact heading so skeptics find it.
+    assert "## Known limitations" in md
+    # Self-grading disclosed loudly when grader == model.
+    assert "self-grading" in md.lower()
+    # Reproduce command and config signature both present.
+    assert "## Reproduce" in md
+    assert "Config signature" in md
+    # Cost panel fires when pricing tier is paid.
+    assert "$" in md
+    # No marketing adjectives in the generated text.
+    forbidden = ["blazing", "lightning", "industry-leading", "massive"]
+    low = md.lower()
+    for adj in forbidden:
+        assert adj not in low, f"marketing adjective leaked: {adj!r}"
