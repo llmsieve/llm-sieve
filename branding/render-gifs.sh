@@ -31,11 +31,15 @@ if [[ ! -x "$REPO_ROOT/.venv/bin/sieve" ]]; then
 fi
 
 # Prefer native VHS if it's on PATH. Fall back to the Docker image.
+# Allow FORCE_DOCKER=1 to override when the native vhs binary crashes
+# on the host's chromium sandboxing (common on Debian-family boxes).
 VHS_BIN=""
-if command -v vhs >/dev/null 2>&1; then
-  VHS_BIN="vhs"
-elif [[ -x "$HOME/go/bin/vhs" ]]; then
-  VHS_BIN="$HOME/go/bin/vhs"
+if [[ -z "${FORCE_DOCKER:-}" ]]; then
+  if command -v vhs >/dev/null 2>&1; then
+    VHS_BIN="vhs"
+  elif [[ -x "$HOME/go/bin/vhs" ]]; then
+    VHS_BIN="$HOME/go/bin/vhs"
+  fi
 fi
 
 # Build a throwaway shim directory that lives only for this run.
@@ -58,14 +62,32 @@ fi
 SHIM
 chmod +x "$SHIM_DIR/pip"
 
+# Same for pipx — the recommended install path in our docs.
+cat > "$SHIM_DIR/pipx" <<'SHIM'
+#!/usr/bin/env bash
+if [[ "$1" == "install" ]]; then
+  shift
+  echo "  installed package $* 1.0.0, installed using Python 3.12.3"
+  echo "  These apps are now globally available"
+  echo "    - sieve"
+  echo "    - sieve-install"
+  echo "done! ✨ 🎉 ✨"
+else
+  echo "pipx (shim) — passthrough disabled in demo mode"
+fi
+SHIM
+chmod +x "$SHIM_DIR/pipx"
+
 # Ensure no proxy is running from a prior session.
 "$REPO_ROOT/.venv/bin/sieve" stop >/dev/null 2>&1 || true
 
 # SPEED is the playback multiplier applied via ffmpeg after VHS is done.
 # e.g. SPEED=2.5 means 40-second raw recording becomes a 16-second GIF.
-# Defaults to 2.5× so the tape can record real inference turns without
-# the final GIF feeling laggy.
-SPEED="${SPEED:-2.5}"
+# Defaults differ by tape (see per-case overrides below):
+#   quick / wizard — 2.5× (recorded near real-time, want snap)
+#   benchmark      — 1.2× (replay already paces itself)
+# A user-supplied SPEED= in the environment wins over the defaults.
+USER_SPEED="${SPEED:-}"
 
 # Guess the output GIF path from the "Output" directive in the tape.
 gif_from_tape() {
@@ -83,16 +105,31 @@ render_one() {
       PATH="$SHIM_DIR:$REPO_ROOT/.venv/bin:$PATH" \
       "$VHS_BIN" "$tape"
   else
+    # Prefer our custom image that has llm-sieve pre-installed into
+    # /opt/sieve AND the FastEmbed ONNX model pre-cached at
+    # /root/.cache/fastembed. That side-steps (a) the .venv shebang
+    # issue (host venv's python path doesn't resolve in-container),
+    # and (b) the 10-15s of HF-download clutter in the recording.
+    local image="sieve-vhs:latest"
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      echo "! $image not built yet; falling back to upstream VHS." \
+           " Build with: docker build -f branding/Dockerfile.vhs -t sieve-vhs:latest ." >&2
+      image="ghcr.io/charmbracelet/vhs:latest"
+    fi
+    # We deliberately don't override HOME — the image's /root has
+    # the FastEmbed cache, and the container is disposable so any
+    # state written under /root disappears when it exits.
+    #
+    # OLLAMA_HOST_IP lets the tapes reference a neutral hostname
+    # (ollama.local) in the rendered GIFs instead of leaking the
+    # recorder's LAN IP. Override per-host with OLLAMA_HOST_IP=... .
+    local ollama_ip="${OLLAMA_HOST_IP:-192.168.1.149}"
     docker run --rm \
       --network host \
+      --add-host "ollama.local:${ollama_ip}" \
       -v "$REPO_ROOT":/work \
-      -v "$SHIM_DIR":/shim \
-      -v "$REPO_ROOT/.venv":/venv \
-      -v "$fake_home":/tmphome \
-      -e "HOME=/tmphome" \
-      -e "PATH=/shim:/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       -w /work \
-      ghcr.io/charmbracelet/vhs "$tape"
+      "$image" "$tape"
   fi
   rm -rf "$fake_home"
   # Kill any proxy that the tape may have left running in the background.
@@ -112,19 +149,26 @@ render_one() {
   fi
 }
 
+DEFAULT_SPEED=2.5
+BENCH_SPEED=1.2
+
 case "${1:-all}" in
   quick)
-    render_one branding/sieve-quick-install.tape
+    SPEED="${USER_SPEED:-$DEFAULT_SPEED}" render_one branding/sieve-quick-install.tape
     ;;
   wizard)
-    render_one branding/sieve-wizard-install.tape
+    SPEED="${USER_SPEED:-$DEFAULT_SPEED}" render_one branding/sieve-wizard.tape
+    ;;
+  benchmark)
+    SPEED="${USER_SPEED:-$BENCH_SPEED}" render_one branding/sieve-benchmark.tape
     ;;
   all)
-    render_one branding/sieve-quick-install.tape
-    render_one branding/sieve-wizard-install.tape
+    SPEED="${USER_SPEED:-$DEFAULT_SPEED}" render_one branding/sieve-quick-install.tape
+    SPEED="${USER_SPEED:-$DEFAULT_SPEED}" render_one branding/sieve-wizard.tape
+    SPEED="${USER_SPEED:-$BENCH_SPEED}"   render_one branding/sieve-benchmark.tape
     ;;
   *)
-    echo "usage: $0 {quick|wizard|all}" >&2
+    echo "usage: $0 {quick|wizard|benchmark|all}" >&2
     exit 2
     ;;
 esac
