@@ -60,14 +60,21 @@ def cli(ctx: click.Context):
     the configuration file, download the embedding model, and initialise
     the encrypted memory store. Then `sieve start` to run the proxy.
     """
-    # No subcommand — show the post-install guidance so a fresh
-    # `pip install llm-sieve; sieve` user has a clear next step rather
-    # than the bare Click usage dump.
+    # No subcommand.
+    #   - TTY: launch the top-level wizard so users have a
+    #     discoverable place to start.
+    #   - No TTY (piped / CI / subprocess): print the post-install
+    #     guidance so non-interactive callers aren't trapped in a
+    #     prompt nobody can see.
     if ctx.invoked_subcommand is None:
-        console.print(f"[bold green]Sieve[/] — {POST_INSTALL_HINT}")
-        console.print(
-            "\n[dim]Run [cyan]sieve --help[/] for the full command list.[/]"
-        )
+        if sys.stdin.isatty():
+            from sieve._wizard_app import run_wizard
+            run_wizard(console=console)
+        else:
+            console.print(f"[bold green]Sieve[/] — {POST_INSTALL_HINT}")
+            console.print(
+                "\n[dim]Run [cyan]sieve --help[/] for the full command list.[/]"
+            )
 
 
 SIEVE_DIR = Path("~/.sieve").expanduser()
@@ -1542,6 +1549,18 @@ def _context_window_warning_text(fixture: str, model_name: str, base_url: str) -
         f"  On cloud models this works fine but charges per input token — your\n"
         f"  $/run figure will be correspondingly large."
     )
+
+
+@cli.command(name="wizard")
+def wizard():
+    """Launch the interactive menu for managing Sieve.
+
+    Equivalent to running `sieve` with no arguments from an interactive
+    terminal — install, service control, store inspection, config,
+    benchmark, demo, uninstall, all in one place.
+    """
+    from sieve._wizard_app import run_wizard
+    run_wizard(console=console)
 
 
 @cli.command()
