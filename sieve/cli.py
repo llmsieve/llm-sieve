@@ -1358,6 +1358,26 @@ def demo(wait_for_write: bool, max_wait: float, use_main_store: bool):
         console.print(f"[bold red]Config error:[/] {exc}")
         sys.exit(1)
 
+    # Pre-flight: is the configured LLM endpoint actually reachable?
+    # Without this, the sandbox spins up, we run 6 turns, each one
+    # gets a 502 from the sandbox proxy (which can't reach Ollama),
+    # and the user sees a wall of identical errors with no fix hint.
+    if not _demo_provider_reachable(config.provider.base_url):
+        console.print(
+            f"[bold red]Can't reach {config.provider.base_url}[/] — "
+            "the LLM endpoint isn't responding.\n"
+        )
+        console.print(
+            "[bold]How to fix:[/]\n"
+            "  1. Verify Ollama (or your provider) is running and "
+            "accepting requests.\n"
+            "  2. If the endpoint moved, update it:\n"
+            "     [cyan]sieve wizard[/]  →  Config  →  provider.base_url\n"
+            "  3. Or re-init with a new provider:\n"
+            f"     [cyan]sieve init --force --provider http://HOST:PORT[/]\n"
+        )
+        sys.exit(1)
+
     if use_main_store:
         pid = _read_pid()
         if pid is None:
@@ -1428,6 +1448,20 @@ def demo(wait_for_write: bool, max_wait: float, use_main_store: bool):
         sys.exit(1)
 
 
+def _demo_provider_reachable(url: str, timeout: float = 3.0) -> bool:
+    """True iff ``{url}/api/tags`` returns 200 within ``timeout``.
+
+    Used by the demo's pre-flight so we fail fast with an actionable
+    message instead of running 6 turns of 502s.
+    """
+    import httpx
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def _run_demo_loop(
     *,
     base_url: str,
@@ -1458,8 +1492,14 @@ def _run_demo_loop(
     ]
     expect_new_fact = [True, True, True, False, False, False]
 
+    from sieve.cli_benchmark import UpstreamLLMError, _extract_upstream_message
+
     console.print("[bold]Sieve demo[/] — 6 messages through the proxy:\n")
+    consecutive_errors = 0
+    aborted = False
     for i, msg in enumerate(messages, 1):
+        if aborted:
+            break
         before = fact_count()
         console.print(f"[dim]turn {i}:[/] [cyan]{msg}[/]")
         payload = {
@@ -1469,7 +1509,17 @@ def _run_demo_loop(
         }
         try:
             r = httpx.post(f"{base_url}/api/chat", json=payload, timeout=60.0)
-            r.raise_for_status()
+            if r.status_code >= 400:
+                upstream = _extract_upstream_message(r)
+                raise UpstreamLLMError(
+                    status=r.status_code,
+                    url=f"{base_url}/api/chat",
+                    model=model,
+                    turn=i,
+                    phase="demo",
+                    upstream_message=upstream,
+                )
+            consecutive_errors = 0
             data = r.json()
             raw = (data.get("message") or {}).get("content", "") or ""
             if "<think>" in raw and "</think>" in raw:
@@ -1485,8 +1535,38 @@ def _run_demo_loop(
                 f"        [green]→[/] {text}  "
                 f"[dim]{phase_tag} (recall rounds: {rounds}, proxy_us: {proxy_us})[/]"
             )
+        except UpstreamLLMError as exc:
+            consecutive_errors += 1
+            short = (exc.upstream_message or f"HTTP {exc.status}").strip()
+            short_line = " ".join(short.split())[:200]
+            console.print(f"        [red]error {exc.status}:[/] {short_line}")
+            # After two consecutive upstream errors, the endpoint is
+            # clearly not recovering — abort with one clear hint
+            # panel rather than repeating the same error six times.
+            if consecutive_errors >= 2:
+                hint = exc.user_hint() or (
+                    "The LLM endpoint is unreachable or rejecting "
+                    "requests. Verify your provider is running, then "
+                    "run `sieve wizard` → Config to point at it."
+                )
+                console.print()
+                console.print(
+                    f"[bold yellow]Aborting demo[/] — {consecutive_errors} "
+                    "turns in a row failed against the LLM endpoint.\n"
+                )
+                console.print(f"[bold]Hint:[/] {hint}\n")
+                aborted = True
+                break
         except Exception as exc:
+            consecutive_errors += 1
             console.print(f"        [red]error:[/] {exc}")
+            if consecutive_errors >= 2:
+                console.print(
+                    "\n[bold yellow]Aborting demo[/] — multiple "
+                    "consecutive errors. Check your LLM endpoint.\n"
+                )
+                aborted = True
+                break
 
         if wait_for_write and store is not None and expect_new_fact[i - 1] and i < len(messages):
             deadline = time.monotonic() + max_wait

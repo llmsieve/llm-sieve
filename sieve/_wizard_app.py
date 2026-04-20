@@ -227,11 +227,32 @@ def build_install_screen(console) -> MenuScreen:
     )
 
 
+_DEFAULT_PROVIDER_URL = "http://127.0.0.1:11434"
+
+
+def _probe_provider(url: str, timeout: float = 2.0) -> bool:
+    """True iff ``{url}/api/tags`` responds 200 within ``timeout``.
+
+    Short timeout keeps the Quick-install happy-path fast; we only
+    wait longer when the default is actually unreachable.
+    """
+    import httpx
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def _run_quick_install(console):
-    """Lazy install: hand off to `sieve init` with all defaults."""
+    """Lazy install: zero prompts in the happy path; one targeted
+    prompt when the default Ollama endpoint isn't reachable, so LAN
+    users don't silently end up with a broken config.
+    """
     console.print(
-        "\n[bold]Quick install[/]  —  provider: http://127.0.0.1:11434, "
-        "FastEmbed embedder, encrypted store at ~/.sieve/memory.db.\n"
+        "\n[bold]Quick install[/]  —  provider: "
+        f"{_DEFAULT_PROVIDER_URL}, FastEmbed embedder, encrypted "
+        "store at ~/.sieve/memory.db.\n"
     )
     if _is_installed():
         reinstall = click.confirm(
@@ -243,12 +264,54 @@ def _run_quick_install(console):
             console.print("[yellow]Cancelled.[/]")
             _pause_for_enter(console)
             return BACK
+
+    # Probe the default. If unreachable, give the user ONE chance to
+    # point at their real Ollama — otherwise we'd write a URL they
+    # can't reach and every benchmark/demo turn would 502.
+    provider_url = _DEFAULT_PROVIDER_URL
+    console.print(
+        f"[dim]Probing {_DEFAULT_PROVIDER_URL}…[/]",
+        end="",
+    )
+    reachable = _probe_provider(_DEFAULT_PROVIDER_URL)
+    if reachable:
+        console.print(" [green]reachable ✓[/]")
+    else:
+        console.print(" [yellow]not reachable[/]")
+        console.print(
+            "\n[bold]Ollama isn't running at the default address.[/]\n"
+            "[dim]Common cases:\n"
+            "  · Ollama is on another host on your network → enter its URL\n"
+            "  · Ollama isn't installed or isn't started yet → start it\n"
+            "    then press enter to use the default anyway[/]"
+        )
+        user_url = click.prompt(
+            "Provider URL",
+            default=_DEFAULT_PROVIDER_URL,
+            show_default=True,
+        ).strip()
+        if user_url and user_url != _DEFAULT_PROVIDER_URL:
+            console.print(f"[dim]Probing {user_url}…[/]", end="")
+            if _probe_provider(user_url):
+                console.print(" [green]reachable ✓[/]")
+                provider_url = user_url
+            else:
+                console.print(" [yellow]not reachable either[/]")
+                go = click.confirm(
+                    "Write this URL anyway (you can fix it later via the "
+                    "Config menu)?",
+                    default=False,
+                )
+                if go:
+                    provider_url = user_url
+                else:
+                    console.print("[yellow]Install cancelled.[/]")
+                    _pause_for_enter(console)
+                    return BACK
+
     from sieve.cli import init as init_cmd
     try:
-        # --force if there's existing config; --provider points at the
-        # Ollama default. The init command handles download + store
-        # creation + prints "Ready!" at the end.
-        args = ["--provider", "http://127.0.0.1:11434"]
+        args = ["--provider", provider_url]
         if _is_installed():
             args.append("--force")
         init_cmd.main(standalone_mode=False, args=args)
@@ -679,6 +742,27 @@ _DANGEROUS_SETTINGS = {
 }
 
 
+def _store_fact_count() -> int:
+    """Return the store's current fact count, or 0 if the store isn't
+    accessible yet. Used to decide whether provider.base_url is safe
+    to edit from the menu — zero facts means no cached embeddings
+    that would be invalidated by a provider switch."""
+    from sieve.config import RecallConfig
+    from sieve.store import MemoryStore
+    try:
+        cfg = RecallConfig.load()
+        ms = MemoryStore(cfg.store)
+        if not ms.db_path.exists():
+            return 0
+        ms.open()
+        try:
+            return int(ms.stats().get("facts_count", 0))
+        finally:
+            ms.close()
+    except Exception:
+        return 0
+
+
 def build_config_screen(console) -> MenuScreen:
     from sieve.config import RecallConfig
     try:
@@ -688,14 +772,28 @@ def build_config_screen(console) -> MenuScreen:
         _pause_for_enter(console)
         return BACK
 
+    facts = _store_fact_count()
+    # When the store is empty we can safely allow provider.base_url
+    # edits from the menu — there are no cached embeddings to
+    # invalidate. Once the store grows, switching providers changes
+    # the embedding space and silently breaks retrieval.
+    base_url_editable = (facts == 0)
+
     def _getter(path: str):
-        """Resolve a dotted path against the loaded RecallConfig."""
         obj = cfg
         for p in path.split("."):
             obj = getattr(obj, p, None)
             if obj is None:
                 return None
         return obj
+
+    def _probe_url(url: str, timeout: float = 2.0) -> bool:
+        import httpx
+        try:
+            r = httpx.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
+            return r.status_code == 200
+        except Exception:
+            return False
 
     def _make_setting_handler(path: str, help_text: str, default_hint: str):
         def _handler():
@@ -715,10 +813,21 @@ def build_config_screen(console) -> MenuScreen:
                 console.print("[dim]Unchanged.[/]")
                 _pause_for_enter(console)
                 return BACK
-            # Apply via direct YAML rewrite — cfg objects are read-
-            # only. The cli_config module exposes load_raw / set_path
-            # / write_raw, which is the same path `sieve config set`
-            # uses from the CLI.
+            # provider.base_url gets a reachability probe — still
+            # write if it fails, but surface it so the user knows
+            # why their next request might 502.
+            if path == "provider.base_url":
+                console.print(f"[dim]Probing {new}…[/]", end="")
+                if _probe_url(new):
+                    console.print(" [green]reachable ✓[/]")
+                else:
+                    console.print(" [yellow]not reachable[/]")
+                    if not click.confirm(
+                        "Write this URL anyway?", default=False
+                    ):
+                        console.print("[yellow]Cancelled.[/]")
+                        _pause_for_enter(console)
+                        return BACK
             from sieve import cli_config as cc
             try:
                 data = cc.load_raw()
@@ -739,14 +848,37 @@ def build_config_screen(console) -> MenuScreen:
         console.print(
             "\n[bold]Settings that require direct ~/.sieve/sieve.yaml edits:[/]\n"
         )
-        for path, reason in _DANGEROUS_SETTINGS.items():
+        dangerous_view = dict(_DANGEROUS_SETTINGS)
+        if not base_url_editable:
+            # Make the reason specific — it's dangerous BECAUSE the
+            # store already has data.
+            dangerous_view["provider.base_url"] = (
+                f"Currently hidden because the store has {facts} facts. "
+                "Switching providers invalidates every embedding. "
+                "Edit ~/.sieve/sieve.yaml if you've sterilised the store."
+            )
+        for path, reason in dangerous_view.items():
             console.print(f"  [yellow]{path}[/]")
             console.print(f"    [dim]{reason}[/]")
         _pause_for_enter(console)
         return BACK
 
     options = []
-    for path, (help_text, default_hint) in _SAFE_SETTINGS.items():
+    # Build the editable list. If the store is empty, prepend
+    # provider.base_url so it's the first thing a fresh user sees
+    # (they're most likely to need it).
+    editable = dict(_SAFE_SETTINGS)
+    if base_url_editable:
+        editable = {
+            "provider.base_url": (
+                "URL of the LLM endpoint Sieve forwards requests to.",
+                "Safe to edit now because the store is empty. "
+                "Restart the service after any change.",
+            ),
+            **_SAFE_SETTINGS,
+        }
+
+    for path, (help_text, default_hint) in editable.items():
         current = _getter(path)
         options.append(MenuOption(
             label=f"{path}  =  {current}",
@@ -763,6 +895,11 @@ def build_config_screen(console) -> MenuScreen:
         "[dim]Safe-to-edit settings are listed below. "
         "Restart the service after any change.[/]"
     )
+    if base_url_editable:
+        subtitle += (
+            "\n[dim]Store is empty — provider.base_url is editable "
+            "until you learn your first facts.[/]"
+        )
     return MenuScreen(
         title="Config",
         subtitle=subtitle,

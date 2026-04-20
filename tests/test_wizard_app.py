@@ -171,12 +171,7 @@ def test_service_screen_options_reflect_running_state(monkeypatch):
 # ── Config screen ──────────────────────────────────────────────────────
 
 
-def test_config_screen_lists_only_safe_settings(tmp_path, monkeypatch):
-    """Dangerous settings (embedding_dimensions, auth_token, base_url
-    when store has data, embeddings.provider) must NOT appear as
-    editable rows — they must be in the 'view-only' help screen."""
-    from sieve import _wizard_app
-    # Minimal valid yaml so RecallConfig.load() works.
+def _make_yaml(tmp_path):
     yaml_path = tmp_path / "sieve.yaml"
     yaml_path.write_text(
         "listen: {host: 127.0.0.1, port: 11435}\n"
@@ -187,20 +182,57 @@ def test_config_screen_lists_only_safe_settings(tmp_path, monkeypatch):
         "embeddings: {provider: fastembed}\n"
         f"store: {{path: {tmp_path / 'm.db'}}}\n"
     )
-    monkeypatch.setenv("SIEVE_CONFIG", str(yaml_path))
+    return yaml_path
+
+
+def test_config_screen_lists_only_safe_settings_when_store_populated(
+    tmp_path, monkeypatch,
+):
+    """Dangerous settings must NOT appear as editable rows when the
+    store has data — they're in the view-only help screen. This is
+    the default behaviour for a user who's been running Sieve."""
+    from sieve import _wizard_app
+    monkeypatch.setenv("SIEVE_CONFIG", str(_make_yaml(tmp_path)))
+    # Pretend the store has facts — that keeps provider.base_url
+    # out of the editable list.
+    monkeypatch.setattr(_wizard_app, "_store_fact_count", lambda: 42)
     console, _ = _console()
     screen = _wizard_app.build_config_screen(console)
     labels = " ".join(o.label for o in screen.options)
-    # Safe settings are present as editable rows.
     assert "provider.default_model" in labels
     assert "pipeline.conversation_turns" in labels
-    # Dangerous settings are NOT editable rows.
+    # Dangerous settings are NOT editable rows when there's data.
     assert "provider.base_url" not in labels
     assert "store.embedding_dimensions" not in labels
     assert "security.auth_token" not in labels
-    # There's a view-only option for the dangerous ones.
     view_only = [o for o in screen.options if "menu doesn't edit" in o.label]
     assert len(view_only) == 1
+
+
+def test_config_screen_allows_provider_base_url_edit_when_store_empty(
+    tmp_path, monkeypatch,
+):
+    """When the store has 0 facts, there are no cached embeddings
+    a provider switch would invalidate — so we promote
+    provider.base_url to an editable row. This closes the UX gap
+    where a Quick-install user couldn't fix an unreachable default
+    URL without editing YAML by hand."""
+    from sieve import _wizard_app
+    monkeypatch.setenv("SIEVE_CONFIG", str(_make_yaml(tmp_path)))
+    monkeypatch.setattr(_wizard_app, "_store_fact_count", lambda: 0)
+    console, _ = _console()
+    screen = _wizard_app.build_config_screen(console)
+    labels = [o.label for o in screen.options]
+    # provider.base_url IS editable now.
+    assert any("provider.base_url" in l for l in labels)
+    # And it's first, so a Quick-install-then-can't-reach user sees
+    # it immediately.
+    first_editable = labels[0]
+    assert "provider.base_url" in first_editable
+    # Other dangerous settings still held back.
+    for label in labels:
+        assert "store.embedding_dimensions" not in label
+        assert "security.auth_token" not in label
 
 
 # ── Uninstall screen ───────────────────────────────────────────────────
