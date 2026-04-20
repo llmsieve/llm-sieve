@@ -14,7 +14,7 @@
 
 ---
 
-## Up to 88% token reduction. Up to 6× less hallucination.
+## Up to 97% token reduction. Up to 9× less hallucination. Gets smarter over time.
 
 Sieve sits between your agent framework and your LLM endpoint. It watches the traffic, extracts durable facts into an encrypted local store, and rewrites bloated prompts into lean, on-demand context. Your agent keeps talking to what looks like its usual endpoint — the model just stops drowning in repeated tool descriptions, stale history, and instructions it already knows.
 
@@ -39,19 +39,31 @@ Sieve removes it. A bloated system prompt full of tool schemas and stale turns b
 
 ## Performance
 
-- **Up to 88% token reduction** on large agent payloads.
-- **Up to 6× less hallucination** on absence-trap queries — questions about facts that were never stored.
-- **Validated across two independent runs:** 30-day on qwen3:30b-a3b and 60-day on qwen3:14b, with cross-family grading.
+- **Up to 97% token reduction** on large agent payloads (96.9% outbound measured on 30-day progressive-activation run).
+- **Up to 9× less hallucination** on absence-trap queries — questions about facts that were never stored (9.3× measured).
+- **Gets smarter over time.** By Days 21–30 of the validation run, Sieve's answer accuracy overtakes the baseline — the store is now dense enough that retrieved facts beat the model's own context.
+- **Validated across two independent runs:** 30-day progressive-activation run on qwen3:30b-a3b and 60-day longitudinal run on qwen3:14b, with cross-family grading.
 
 Full methodology and detailed analysis will be published in a forthcoming paper. See [`evaluation/RESULTS_SUMMARY.md`](evaluation/RESULTS_SUMMARY.md) for headline figures.
 
 <p align="center">
-  <img src="docs/figures/token-divergence.svg#gh-dark-mode-only" alt="Token growth over 60 days — Baseline vs Sieve" width="720">
-  <img src="docs/figures/token-divergence-light.svg#gh-light-mode-only" alt="Token growth over 60 days — Baseline vs Sieve" width="720">
+  <img src="docs/figures/token-divergence.svg#gh-dark-mode-only" alt="Context growth over 60 days — Baseline vs Sieve" width="720">
+  <img src="docs/figures/token-divergence-light.svg#gh-light-mode-only" alt="Context growth over 60 days — Baseline vs Sieve" width="720">
 </p>
 
 <p align="center">
-  <img src="docs/figures/hallucination-divergence.svg" alt="Hallucination rate over 60 days" width="720">
+  <img src="docs/figures/hallucination-bars.svg#gh-dark-mode-only" alt="Hallucination: Baseline vs Sieve — 9.3× less" width="720">
+  <img src="docs/figures/hallucination-bars-light.svg#gh-light-mode-only" alt="Hallucination: Baseline vs Sieve — 9.3× less" width="720">
+</p>
+
+<p align="center">
+  <img src="docs/figures/accuracy-crossover.svg#gh-dark-mode-only" alt="Sieve gets smarter over time — accuracy by day-bucket" width="720">
+  <img src="docs/figures/accuracy-crossover-light.svg#gh-light-mode-only" alt="Sieve gets smarter over time — accuracy by day-bucket" width="720">
+</p>
+
+<p align="center">
+  <img src="docs/figures/hallucination-divergence.svg#gh-dark-mode-only" alt="Hallucination rate over 60 days" width="720">
+  <img src="docs/figures/hallucination-divergence-light.svg#gh-light-mode-only" alt="Hallucination rate over 60 days" width="720">
 </p>
 
 ## Quick start
