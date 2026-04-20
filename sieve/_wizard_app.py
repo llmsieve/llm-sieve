@@ -804,11 +804,26 @@ def build_config_screen(console) -> MenuScreen:
                 f"[dim]{default_hint}[/]\n\n"
                 f"Current value: [cyan]{current}[/]\n"
             )
-            new = click.prompt(
-                "New value (enter to keep current)",
-                default=str(current) if current is not None else "",
-                show_default=False,
-            ).strip()
+            # provider.default_model gets the live-model picker, same
+            # UX as the benchmark wizard. A text prompt for a value
+            # that should come from a list is a footgun — typos silently
+            # write an unusable model name.
+            if path == "provider.default_model":
+                from sieve._wizard_helpers import pick_model
+                endpoint = _getter("provider.base_url") or ""
+                new = pick_model(
+                    "Pick a model",
+                    base_url=endpoint,
+                    default=str(current) if current else None,
+                    console=console,
+                )
+                new = (new or "").strip()
+            else:
+                new = click.prompt(
+                    "New value (enter to keep current)",
+                    default=str(current) if current is not None else "",
+                    show_default=False,
+                ).strip()
             if not new or new == str(current):
                 console.print("[dim]Unchanged.[/]")
                 _pause_for_enter(console)
