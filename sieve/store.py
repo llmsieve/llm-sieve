@@ -228,7 +228,8 @@ _V2_ALTERS: list[tuple[str, str, str]] = [
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    from sieve.clock import get_clock
+    return get_clock().now().isoformat()
 
 
 def _new_id() -> str:

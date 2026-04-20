@@ -56,7 +56,8 @@ def _categorize(name: str, description: str) -> str:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    from sieve.clock import get_clock
+    return get_clock().now().isoformat()
 
 
 def _tool_name(tool: dict) -> str:

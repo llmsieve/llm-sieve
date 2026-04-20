@@ -96,7 +96,8 @@ CREATE INDEX IF NOT EXISTS idx_request_path ON request_metrics(path);
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    from sieve.clock import get_clock
+    return get_clock().now().isoformat()
 
 
 def _approx_tokens(text: str) -> int:
