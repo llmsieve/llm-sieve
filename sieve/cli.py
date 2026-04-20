@@ -1438,12 +1438,25 @@ def demo(wait_for_write: bool, max_wait: float):
 @cli.command()
 @click.option("--config", "-c", "config_path", default=None, help="Path to sieve.yaml")
 @click.option("--model", default=None, help="Override the model name (defaults to provider.default_model)")
-def benchmark(config_path: str | None, model: str | None):
+@click.option(
+    "--compare",
+    is_flag=True,
+    default=False,
+    help=(
+        "Two-pass benchmark: run the 15-turn script through both the raw LLM "
+        "(baseline) and the Sieve proxy, using an agent-shaped payload each "
+        "turn. Prints side-by-side tokens + latency. Takes ~2× as long."
+    ),
+)
+def benchmark(config_path: str | None, model: str | None, compare: bool):
     """Run a reproducible 15-message benchmark against the proxy.
 
-    Anyone can run this to verify the token-reduction and memory-learning
-    claims on their own machine. Requires the proxy to be running:
-    start it with ``sieve start`` in another terminal first.
+    Default mode demonstrates memory + recall features on a bare-chat
+    baseline. Use --compare to demonstrate token reduction against a
+    realistic agent-shaped inbound payload.
+
+    Requires the proxy to be running: start it with ``sieve start`` in
+    another terminal first.
     """
     pid = _read_pid()
     if pid is None:
@@ -1478,7 +1491,81 @@ def benchmark(config_path: str | None, model: str | None):
         except Exception:
             return 0
 
-    from sieve.cli_benchmark import run_benchmark, render_summary
+    def _reset_store() -> None:
+        """Clear facts/entities/etc between compare passes.
+
+        The baseline pass hits the LLM directly, so nothing should be
+        written — but if the user accidentally points --compare at a
+        store that already has content, we clear it so the Sieve pass
+        starts from zero facts and the "facts learned" column reflects
+        this run only.
+
+        FK-safe order: children first (relationships, vec tables,
+        preferences, etc.), then parents (facts, entities). Falls back
+        to PRAGMA foreign_keys=OFF for the duration of the delete if
+        the ordered approach fails.
+        """
+        try:
+            conn = ms._conn
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                for table in (
+                    "vec_facts", "vec_episodes",
+                    "relationships", "preferences", "known_unknowns",
+                    "audit_log", "fingerprints", "sessions",
+                    "episodes", "facts", "entities",
+                ):
+                    try:
+                        conn.execute(f"DELETE FROM {table}")
+                    except Exception:
+                        pass  # table may not exist
+                conn.commit()
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+        except Exception as exc:
+            logging.getLogger("recall.cli").warning(
+                "Store reset failed (non-fatal): %s", exc
+            )
+
+    from sieve.cli_benchmark import (
+        run_benchmark, run_benchmark_compare,
+        render_summary, render_compare_summary,
+    )
+
+    if compare:
+        direct_base = config.provider.base_url
+        console.print(
+            f"[bold]Sieve benchmark --compare[/] — two passes through "
+            f"agent-shaped payloads\n"
+            f"  baseline: [cyan]{direct_base}[/] (no Sieve)\n"
+            f"  sieve:    [cyan]{base}[/]\n"
+        )
+        console.print(
+            "[dim]This takes ~2× a normal benchmark run "
+            "(~2-5 minutes).[/]\n"
+        )
+        try:
+            _reset_store()
+            compare_summary = run_benchmark_compare(
+                sieve_base_url=base,
+                direct_base_url=direct_base,
+                model=model_name,
+                store_fact_count=_count,
+                reset_store=_reset_store,
+            )
+        except Exception as exc:
+            console.print(f"[bold red]Benchmark failed:[/] {exc}")
+            ms.close()
+            sys.exit(1)
+        ms.close()
+        render_compare_summary(
+            compare_summary,
+            model=model_name,
+            sieve_base_url=base,
+            direct_base_url=direct_base,
+            console=console,
+        )
+        return
 
     console.print(
         f"[bold]Sieve benchmark[/] — 15 messages through the proxy at "

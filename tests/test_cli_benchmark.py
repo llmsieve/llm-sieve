@@ -320,7 +320,6 @@ def test_render_summary_includes_key_lines():
     summary = BenchmarkSummary(
         total_inbound=15_000,
         total_outbound=1_500,
-        reduction_pct=90.0,
         facts_learned=5,
         trap_absence_signal=True,
         turns=[
@@ -359,7 +358,6 @@ def test_render_summary_flags_fabrication():
     summary = BenchmarkSummary(
         total_inbound=100,
         total_outbound=80,
-        reduction_pct=20.0,
         facts_learned=0,
         trap_absence_signal=False,
         turns=[],

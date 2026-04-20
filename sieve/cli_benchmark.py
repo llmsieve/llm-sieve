@@ -1,22 +1,33 @@
 """`sieve benchmark` — reproducible proof of token reduction + memory learning.
 
-Runs a 15-message scripted conversation against a running Sieve proxy and
-measures inbound vs outbound tokens, facts learned per turn, response time,
-and whether the absence-signal layer fires on a trap query.
+Runs a 15-message scripted conversation and measures:
+  - inbound vs outbound tokens (how much bloat the proxy strips)
+  - facts learned per turn (memory is actually being written)
+  - correct recalls (the store surfaces the right facts on query turns)
+  - absence signal on the trap (no hallucination on unmentioned entities)
 
-Designed to work with any OpenAI-compatible or Ollama-compatible LLM that
-sieve.yaml is pointed at — the messages do not depend on the model knowing
-specific facts, only on the proxy's observable behaviour.
+Two run modes:
+
+  - **Single-mode** (default): sends each user turn as a bare chat
+    message. Cheap to run and demonstrates the memory + recall
+    features; the token-reduction number will be negative because
+    Sieve is adding context to an empty baseline.
+  - **Compare mode** (`--compare`): wraps each turn inside a realistic
+    agent-shaped payload (~3K-token system prompt + tool schemas +
+    prior history), runs the full script twice — once directly against
+    the LLM (baseline), once through Sieve — and reports side-by-side
+    token counts. This is the one that demonstrates Sieve's token
+    reduction claim honestly.
+
+Designed to work with any OpenAI-compatible or Ollama-compatible LLM
+that sieve.yaml is pointed at — the messages do not depend on the model
+knowing specific facts, only on the proxy's observable behaviour.
 
 Public entry points:
 
-- ``run_benchmark(base_url, model, store_fact_count, transport=None)`` —
-  pure-ish core used by the CLI and the tests. Yields ``TurnResult`` rows.
-- ``render_summary(results, owner_name, fact_count_before, fact_count_after)``
-  — builds the rich summary table.
-
-The CLI wrapper in ``cli.py`` handles config loading, proxy discovery, and
-printing.
+- ``run_benchmark(...)`` — single-mode runner. Returns a BenchmarkSummary.
+- ``run_benchmark_compare(...)`` — two-pass runner. Returns a CompareSummary.
+- ``render_summary(...)`` / ``render_compare_summary(...)`` — rich tables.
 """
 
 from __future__ import annotations
@@ -62,6 +73,33 @@ BENCHMARK_MESSAGES: list[dict] = [
 ]
 
 
+# ── Recall-correctness heuristics ─────────────────────────────────────────
+# Per-turn keyword checks for the retrieve/update phases. A response is
+# "correct" when at least one of the expected keywords appears (case
+# insensitive). Deliberately permissive — models phrase things
+# differently and we don't want to fail on "Porto, Portugal" vs "in Porto".
+RECALL_EXPECTATIONS: dict[int, tuple[str, ...]] = {
+    4: ("porto",),
+    5: ("marine biolog", "octopus"),
+    6: ("luna",),
+    7: ("marine biolog", "octopus"),
+    8: ("alex",),
+    14: ("lisbon",),
+}
+
+
+def response_recalls(index: int, text: str) -> bool | None:
+    """Was the expected fact present in the model's response?
+
+    Returns None for turns we don't grade (introduce / deep / trap).
+    """
+    expected = RECALL_EXPECTATIONS.get(index)
+    if expected is None:
+        return None
+    low = (text or "").lower()
+    return any(kw in low for kw in expected)
+
+
 # ── Heuristics for absence-signal detection ──────────────────────────────
 
 # Phrases we accept as evidence the model refused / signalled absence rather
@@ -93,11 +131,7 @@ ABSENCE_PATTERNS: tuple[str, ...] = (
 
 
 def looks_like_absence_signal(text: str) -> bool:
-    """Fuzzy heuristic: did the model refuse/abstain on the trap?
-
-    This is conservative — a clean refusal matches, anything that *might*
-    be fabrication (names a job, describes Jordan, etc.) does not.
-    """
+    """Fuzzy heuristic: did the model refuse/abstain on the trap?"""
     if not text:
         return False
     low = text.lower()
@@ -115,28 +149,78 @@ class TurnResult:
     phase: str             # "introduce" / "retrieve" / "deep" / "update" / "trap"
     prompt: str
     response: str
-    inbound_tokens: int    # what the proxy received
+    inbound_tokens: int    # what the proxy received (after payload wrap)
     outbound_tokens: int   # what the proxy sent to the LLM
     facts_before: int
     facts_after: int
     elapsed_s: float
-    absence_signal: bool | None  # None except on trap; True/False on trap
-    # Progressive-activation phase reported by the proxy for this request.
-    # Empty string on older proxies that don't emit the X-Sieve-Phase header.
-    activation_phase: str = ""
+    absence_signal: bool | None  # None except on trap
+    correct_recall: bool | None = None  # None except on retrieve/update
+    activation_phase: str = ""   # X-Sieve-Phase header, empty if missing
 
 
 @dataclass(frozen=True)
 class BenchmarkSummary:
     total_inbound: int
     total_outbound: int
-    reduction_pct: float
     facts_learned: int
     trap_absence_signal: bool | None
     turns: list[TurnResult]
+    correct_recalls: int = 0
+    gradable_recalls: int = 0
+
+    @property
+    def reduction_pct(self) -> float:
+        """Legacy percentage — honest: zero when outbound > inbound."""
+        if self.total_inbound <= 0:
+            return 0.0
+        if self.total_outbound > self.total_inbound:
+            return 0.0
+        return (self.total_inbound - self.total_outbound) / self.total_inbound * 100.0
+
+
+@dataclass(frozen=True)
+class CompareSummary:
+    """Two-pass summary: baseline (direct) vs Sieve (proxy)."""
+
+    baseline_tokens: int       # tokens sent directly to the LLM (no Sieve)
+    sieve_outbound_tokens: int # tokens Sieve forwarded to the LLM
+    sieve_inbound_tokens: int  # tokens Sieve received from the "agent"
+    baseline: BenchmarkSummary
+    sieve: BenchmarkSummary
+
+    @property
+    def tokens_saved(self) -> int:
+        return self.baseline_tokens - self.sieve_outbound_tokens
+
+    @property
+    def reduction_pct(self) -> float:
+        if self.baseline_tokens <= 0:
+            return 0.0
+        return (self.tokens_saved / self.baseline_tokens) * 100.0
 
 
 # ── Pure core ────────────────────────────────────────────────────────────
+
+
+def _approx(text: str) -> int:
+    """chars/4 fallback — matches sieve's internal approximation."""
+    return max(1, len(text or "") // 4)
+
+
+def _payload_tokens(payload: dict) -> int:
+    """Estimate total tokens in an outgoing payload."""
+    import json
+    return _approx(json.dumps(payload))
+
+
+def _default_wrap(user_message: str, model: str) -> dict:
+    """Single-mode payload: just the user turn."""
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": user_message}],
+        "stream": False,
+    }
 
 
 def run_benchmark(
@@ -147,29 +231,44 @@ def run_benchmark(
     transport: httpx.BaseTransport | None = None,
     timeout: float = 90.0,
     messages: Iterable[dict] = BENCHMARK_MESSAGES,
+    wrap_payload: Callable[[str, str], dict] | None = None,
+    use_sieve_headers: bool = True,
 ) -> BenchmarkSummary:
-    """Drive the scripted conversation through a live proxy.
+    """Drive the scripted conversation through a live endpoint.
 
     Parameters
     ----------
-    base_url : str
-        The Sieve proxy root (e.g. ``http://127.0.0.1:11435``).
-    model : str
-        Model name to pass in the payload. Whatever the proxy is pointed at.
-    store_fact_count : Callable[[], int]
-        Zero-arg callable returning the current number of current facts in
-        the store. Queried before and after each turn so we can attribute
-        learning to messages. In the CLI this reads ``MemoryStore.stats``;
-        tests inject a counter.
-    transport : httpx.BaseTransport, optional
-        Override httpx transport for tests (MockTransport). Default: real HTTP.
-    timeout : float
+    base_url
+        Target endpoint root. For single-mode / Sieve pass this is the
+        Sieve proxy (e.g. http://127.0.0.1:11435). For the baseline
+        pass this is the direct LLM endpoint.
+    model
+        Model name to pass in the payload.
+    store_fact_count
+        Zero-arg callable returning the current current-fact count.
+        Polled before/after each turn.
+    transport
+        Optional httpx transport override for tests.
+    timeout
         Per-request timeout in seconds.
-    messages : iterable of {"phase": str, "content": str}
+    messages
         Override the script. Default is BENCHMARK_MESSAGES.
+    wrap_payload
+        Callable ``(user_message, model) -> dict`` that builds the
+        outgoing payload. Default is a bare user-turn (single mode).
+        For compare mode pass ``build_agent_payload`` from
+        ``sieve._agent_fixture``.
+    use_sieve_headers
+        When True, inbound/outbound token counts are read from
+        ``X-Sieve-Inbound-Tokens`` / ``X-Sieve-Outbound-Tokens``
+        response headers (the authoritative source when the endpoint
+        is the Sieve proxy). When False (baseline runs hitting the
+        LLM directly), both counts are computed client-side from the
+        outgoing payload, and outbound == inbound.
     """
     results: list[TurnResult] = []
     messages = list(messages)
+    wrap = wrap_payload or _default_wrap
 
     initial_facts = store_fact_count()
 
@@ -180,11 +279,7 @@ def run_benchmark(
     with httpx.Client(**client_kwargs) as client:
         for i, msg in enumerate(messages, start=1):
             facts_before = store_fact_count()
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": msg["content"]}],
-                "stream": False,
-            }
+            payload = wrap(msg["content"], model)
             import time
             t0 = time.perf_counter()
             r = client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
@@ -194,11 +289,14 @@ def run_benchmark(
             data = r.json() if r.content else {}
             response_text = ((data.get("message") or {}).get("content") or "").strip()
 
-            # Server-computed counts when available; fall back to client-side
-            # approximation so the benchmark still works if the user's proxy
-            # predates the header.
-            inbound = int(r.headers.get("X-Sieve-Inbound-Tokens", "0")) or _approx(msg["content"])
-            outbound = int(r.headers.get("X-Sieve-Outbound-Tokens", "0"))
+            if use_sieve_headers:
+                inbound = int(r.headers.get("X-Sieve-Inbound-Tokens", "0")) or _payload_tokens(payload)
+                outbound = int(r.headers.get("X-Sieve-Outbound-Tokens", "0"))
+            else:
+                # Direct-to-LLM baseline — no Sieve headers.
+                tokens = _payload_tokens(payload)
+                inbound = tokens
+                outbound = tokens
             activation_phase = r.headers.get("X-Sieve-Phase", "")
 
             facts_after = store_fact_count()
@@ -206,6 +304,7 @@ def run_benchmark(
             absence = None
             if msg["phase"] == "trap":
                 absence = looks_like_absence_signal(response_text)
+            correct = response_recalls(i, response_text)
 
             results.append(TurnResult(
                 index=i,
@@ -218,37 +317,119 @@ def run_benchmark(
                 facts_after=facts_after,
                 elapsed_s=elapsed,
                 absence_signal=absence,
+                correct_recall=correct,
                 activation_phase=activation_phase,
             ))
 
     total_inbound = sum(t.inbound_tokens for t in results)
     total_outbound = sum(t.outbound_tokens for t in results)
-    reduction_pct = (
-        (total_inbound - total_outbound) / total_inbound * 100.0
-        if total_inbound else 0.0
-    )
     final_facts = store_fact_count()
     trap_signal = next(
         (t.absence_signal for t in results if t.phase == "trap"),
         None,
     )
+    gradable = [t for t in results if t.correct_recall is not None]
+    correct = sum(1 for t in gradable if t.correct_recall)
 
     return BenchmarkSummary(
         total_inbound=total_inbound,
         total_outbound=total_outbound,
-        reduction_pct=reduction_pct,
         facts_learned=max(0, final_facts - initial_facts),
+        correct_recalls=correct,
+        gradable_recalls=len(gradable),
         trap_absence_signal=trap_signal,
         turns=results,
     )
 
 
-def _approx(text: str) -> int:
-    """Fallback client-side token count (chars/4) — matches sieve's own approximation."""
-    return max(1, len(text or "") // 4)
+def run_benchmark_compare(
+    *,
+    sieve_base_url: str,
+    direct_base_url: str,
+    model: str,
+    store_fact_count: Callable[[], int],
+    reset_store: Callable[[], None],
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 120.0,
+    messages: Iterable[dict] = BENCHMARK_MESSAGES,
+) -> CompareSummary:
+    """Two-pass benchmark: baseline (direct) then Sieve (proxy).
+
+    Both passes send the same agent-shaped payload per turn. The
+    baseline pass shows what an uninstrumented agent costs per turn;
+    the Sieve pass shows what Sieve compresses it to. The delta is
+    the honest "tokens saved" number.
+
+    Parameters
+    ----------
+    sieve_base_url
+        The Sieve proxy root.
+    direct_base_url
+        The LLM endpoint the proxy forwards to (e.g. Ollama at 11434).
+    reset_store
+        Called between the two passes to clear any facts written
+        during the baseline so the Sieve pass starts from the same
+        state. Required — the store is a side channel that would
+        otherwise pollute the Sieve pass's "facts learned" count.
+    """
+    from sieve._agent_fixture import build_agent_payload
+
+    # Pass 1 — baseline, direct to LLM.
+    baseline_summary = run_benchmark(
+        base_url=direct_base_url,
+        model=model,
+        store_fact_count=store_fact_count,
+        transport=transport,
+        timeout=timeout,
+        messages=messages,
+        wrap_payload=build_agent_payload,
+        use_sieve_headers=False,
+    )
+
+    # Clear any bleed-through between passes. The baseline pass
+    # doesn't go through Sieve, so no facts should have been written
+    # — but reset_store is cheap insurance against misconfiguration.
+    reset_store()
+
+    # Pass 2 — through Sieve proxy.
+    sieve_summary = run_benchmark(
+        base_url=sieve_base_url,
+        model=model,
+        store_fact_count=store_fact_count,
+        transport=transport,
+        timeout=timeout,
+        messages=messages,
+        wrap_payload=build_agent_payload,
+        use_sieve_headers=True,
+    )
+
+    return CompareSummary(
+        baseline_tokens=baseline_summary.total_inbound,
+        sieve_outbound_tokens=sieve_summary.total_outbound,
+        sieve_inbound_tokens=sieve_summary.total_inbound,
+        baseline=baseline_summary,
+        sieve=sieve_summary,
+    )
 
 
 # ── Rendering (rich) ─────────────────────────────────────────────────────
+
+
+def _format_cut(inbound: int, outbound: int) -> str:
+    """Render the per-row token-delta column honestly.
+
+    When outbound < inbound: show the positive reduction percentage.
+    When outbound > inbound: show the overhead in tokens, NOT a
+        negative percentage (misleading).
+    When inbound == 0 or missing: show em-dash.
+    """
+    if inbound <= 0:
+        return "—"
+    if outbound <= inbound:
+        pct = (inbound - outbound) / inbound * 100.0
+        return f"{pct:.0f}%"
+    overhead = outbound - inbound
+    return f"[dim]+{overhead}t[/]"
 
 
 def render_summary(
@@ -258,10 +439,12 @@ def render_summary(
     base_url: str,
     console,
 ) -> None:
-    """Pretty-print the per-turn table + totals to a rich Console.
+    """Pretty-print single-mode benchmark output.
 
-    Kept separate from run_benchmark so tests can assert on summary values
-    without needing to parse rendered output.
+    Leads with the memory-learning story (facts, correct recalls,
+    trap). Token reduction is reported honestly — no negative
+    percentages — but demoted to a secondary panel since single-mode
+    doesn't showcase Sieve's compression claim.
     """
     from rich.table import Table
     from rich.panel import Panel
@@ -273,25 +456,15 @@ def render_summary(
     table.add_column("Prompt", overflow="fold", max_width=38)
     table.add_column("In", justify="right")
     table.add_column("Out", justify="right")
-    table.add_column("Cut", justify="right")
+    table.add_column("Δ", justify="right")
     table.add_column("Facts", justify="right")
+    table.add_column("Recall", justify="center")
     table.add_column("Time", justify="right")
 
-    # Track phase transitions so we can annotate where OBSERVE →
-    # ACCUMULATE → ACTIVATE happen in the conversation. The transition
-    # column is the empty string on all rows except the first one of a
-    # new phase; this keeps the table readable while making the shift
-    # obvious.
     prev_activation = ""
     for t in summary.turns:
-        cut = "—"
-        if t.inbound_tokens:
-            pct = (t.inbound_tokens - t.outbound_tokens) / t.inbound_tokens * 100
-            cut = f"{pct:+.0f}%" if pct < 0 else f"{pct:.0f}%"
+        cut = _format_cut(t.inbound_tokens, t.outbound_tokens)
         facts_delta = t.facts_after - t.facts_before
-        # Always render the fact count so readers can see the store
-        # growing message-by-message, not only on gain turns. A plain
-        # number reads cleanly next to a coloured delta.
         if facts_delta > 0:
             facts = f"{t.facts_after} [green](+{facts_delta})[/]"
         else:
@@ -303,22 +476,27 @@ def render_summary(
             "update": "update",
             "trap": "[bold yellow]trap[/]",
         }.get(t.phase, t.phase)
-        # Short, colour-coded activation-phase badge. Older proxies
-        # without progressive activation return an empty header; we
-        # render "—" so the column stays visually aligned.
         ap = (t.activation_phase or "").upper()
         activation_badge = {
             "OBSERVE": "[cyan]obs[/]",
             "ACCUMULATE": "[yellow]acc[/]",
             "ACTIVATE": "[green]act[/]",
         }.get(ap, "[dim]—[/]")
-        # Decorate the badge with an → marker on the first message of a
-        # new phase so the transition is visually obvious without a
-        # dedicated transitions panel.
         if ap and ap != prev_activation and prev_activation:
             activation_badge = f"{activation_badge} [bold]↗[/]"
         if ap:
             prev_activation = ap
+        # Recall correctness cell: ✓ / ✗ / blank.
+        if t.correct_recall is True:
+            recall_cell = "[green]✓[/]"
+        elif t.correct_recall is False:
+            recall_cell = "[red]✗[/]"
+        elif t.phase == "trap":
+            recall_cell = (
+                "[green]✓[/]" if t.absence_signal else "[red]✗[/]"
+            )
+        else:
+            recall_cell = ""
         table.add_row(
             str(t.index),
             phase_label,
@@ -328,15 +506,12 @@ def render_summary(
             str(t.outbound_tokens),
             cut,
             facts,
+            recall_cell,
             f"{t.elapsed_s:.1f}s",
         )
 
     console.print(table)
 
-    # Phase-transition summary — a dedicated one-liner list so the
-    # transitions are discoverable at a glance even if the table badge
-    # is missed. Only emitted when the proxy reported at least one
-    # phase transition during the run.
     transitions: list[tuple[int, str, str]] = []
     last = ""
     for t in summary.turns:
@@ -355,58 +530,166 @@ def render_summary(
             )
         )
 
-    # Per-phase reduction breakdown — makes the phase transitions
-    # visible at a glance. Skipped when the proxy doesn't emit the
-    # X-Sieve-Phase header (older builds).
-    phase_rows: dict[str, tuple[int, int, int]] = {}
-    for t in summary.turns:
-        if not t.activation_phase:
-            continue
-        key = t.activation_phase.upper()
-        count, inb, outb = phase_rows.get(key, (0, 0, 0))
-        phase_rows[key] = (count + 1, inb + t.inbound_tokens, outb + t.outbound_tokens)
-
-    if phase_rows:
-        # Render in phase order: OBSERVE → ACCUMULATE → ACTIVATE, then any others.
-        order = ["OBSERVE", "ACCUMULATE", "ACTIVATE"]
-        ordered_keys = [k for k in order if k in phase_rows] + \
-            [k for k in phase_rows if k not in order]
-        phase_table = Table(title="Per-phase reduction", show_lines=False)
-        phase_table.add_column("Phase")
-        phase_table.add_column("Messages", justify="right")
-        phase_table.add_column("Inbound", justify="right")
-        phase_table.add_column("Outbound", justify="right")
-        phase_table.add_column("Reduction", justify="right")
-        for key in ordered_keys:
-            count, inb, outb = phase_rows[key]
-            reduction = (inb - outb) / inb * 100.0 if inb else 0.0
-            phase_table.add_row(
-                key,
-                str(count),
-                f"{inb:,}",
-                f"{outb:,}",
-                f"{reduction:.1f}%",
-            )
-        console.print(phase_table)
-
-    # Overall summary panel
+    # Lead with the memory-learning story.
     lines = [
         f"[bold]Model:[/]  [cyan]{model}[/]",
         f"[bold]Proxy:[/]  [cyan]{base_url}[/]",
         "",
-        f"[bold]Total inbound tokens:[/]   {summary.total_inbound:,}",
-        f"[bold]Total outbound tokens:[/]  {summary.total_outbound:,}",
-        f"[bold]Overall reduction:[/]      [green]{summary.reduction_pct:.1f}%[/]",
-        f"[bold]Facts learned:[/]          {summary.facts_learned}",
+        f"[bold]Facts learned:[/]       {summary.facts_learned}",
     ]
+    if summary.gradable_recalls:
+        lines.append(
+            f"[bold]Correct recalls:[/]     "
+            f"[green]{summary.correct_recalls}/{summary.gradable_recalls}[/]"
+        )
     if summary.trap_absence_signal is True:
-        lines.append("[bold]Trap query:[/]             [green]absence signal fired[/] ✓")
+        lines.append("[bold]Trap query:[/]          [green]absence signal fired ✓[/]")
     elif summary.trap_absence_signal is False:
-        lines.append("[bold]Trap query:[/]             [red]no absence signal detected[/]")
+        lines.append("[bold]Trap query:[/]          [red]no absence signal detected[/]")
     else:
-        lines.append("[bold]Trap query:[/]             (not reached)")
-
-    console.print(Panel("\n".join(lines), title="Benchmark summary", border_style="cyan"))
+        lines.append("[bold]Trap query:[/]          (not reached)")
     console.print(
-        "\n[dim]Run this benchmark yourself: [cyan]sieve benchmark[/][/]"
+        Panel("\n".join(lines), title="Benchmark summary", border_style="cyan")
+    )
+
+    # Token panel — demoted, honest framing. In single-mode the
+    # inbound is tiny (bare user turns) so we report the proxy overhead
+    # per turn rather than a misleading reduction percentage.
+    avg_overhead = (
+        (summary.total_outbound - summary.total_inbound) / len(summary.turns)
+        if summary.turns else 0.0
+    )
+    if avg_overhead > 0:
+        token_lines = [
+            f"[dim]Inbound (bare chat):[/]   {summary.total_inbound:,} tokens",
+            f"[dim]Outbound (with Sieve):[/] {summary.total_outbound:,} tokens",
+            f"[dim]Proxy overhead:[/]        ~{avg_overhead:.0f} tokens / turn",
+            "",
+            "[dim]Single-mode sends bare user turns; Sieve adds its lean prompt",
+            "and recall tool. To see reduction vs a real agent payload, run:[/]",
+            "  [cyan]sieve benchmark --compare[/]",
+        ]
+    else:
+        reduction = (
+            (summary.total_inbound - summary.total_outbound)
+            / summary.total_inbound * 100.0
+            if summary.total_inbound else 0.0
+        )
+        token_lines = [
+            f"Inbound:   {summary.total_inbound:,} tokens",
+            f"Outbound:  {summary.total_outbound:,} tokens",
+            f"Reduction: [green]{reduction:.1f}%[/]",
+        ]
+    console.print(
+        Panel(
+            "\n".join(token_lines),
+            title="Tokens",
+            border_style="dim",
+        )
+    )
+    console.print("\n[dim]For token-reduction proof: [cyan]sieve benchmark --compare[/][/]")
+
+
+def render_compare_summary(
+    summary: CompareSummary,
+    *,
+    model: str,
+    sieve_base_url: str,
+    direct_base_url: str,
+    console,
+) -> None:
+    """Side-by-side rendering for --compare runs.
+
+    The headline is tokens-saved. The memory-features story lives in
+    a secondary panel since it's primarily a property of the Sieve
+    pass.
+    """
+    from rich.table import Table
+    from rich.panel import Panel
+
+    # Side-by-side totals.
+    saved = summary.tokens_saved
+    pct = summary.reduction_pct
+
+    token_table = Table(title="Baseline vs Sieve", show_lines=False)
+    token_table.add_column("Metric")
+    token_table.add_column("Baseline (direct)", justify="right")
+    token_table.add_column("With Sieve", justify="right")
+    token_table.add_column("Δ", justify="right")
+    token_table.add_row(
+        "Tokens sent to LLM",
+        f"{summary.baseline_tokens:,}",
+        f"{summary.sieve_outbound_tokens:,}",
+        (
+            f"[green]−{saved:,} ({pct:.1f}%)[/]" if saved > 0
+            else f"[red]+{-saved:,}[/]"
+        ),
+    )
+    baseline_avg_latency = (
+        sum(t.elapsed_s for t in summary.baseline.turns) / len(summary.baseline.turns)
+        if summary.baseline.turns else 0.0
+    )
+    sieve_avg_latency = (
+        sum(t.elapsed_s for t in summary.sieve.turns) / len(summary.sieve.turns)
+        if summary.sieve.turns else 0.0
+    )
+    token_table.add_row(
+        "Avg latency / turn",
+        f"{baseline_avg_latency:.1f}s",
+        f"{sieve_avg_latency:.1f}s",
+        f"{(sieve_avg_latency - baseline_avg_latency):+.1f}s",
+    )
+    console.print(token_table)
+
+    # Memory features — Sieve-only (baseline has no store).
+    recall_line = (
+        f"[green]{summary.sieve.correct_recalls}/{summary.sieve.gradable_recalls}[/]"
+        if summary.sieve.gradable_recalls else "—"
+    )
+    trap_line = (
+        "[green]absence signal fired ✓[/]"
+        if summary.sieve.trap_absence_signal is True
+        else "[red]no absence signal[/]"
+        if summary.sieve.trap_absence_signal is False
+        else "(not reached)"
+    )
+    console.print(
+        Panel(
+            "\n".join([
+                f"[bold]Facts learned:[/]       {summary.sieve.facts_learned}",
+                f"[bold]Correct recalls:[/]     {recall_line}",
+                f"[bold]Trap query:[/]          {trap_line}",
+            ]),
+            title="Memory features (Sieve pass)",
+            border_style="cyan",
+        )
+    )
+
+    # Summary panel.
+    headline_lines = [
+        f"[bold]Model:[/]     [cyan]{model}[/]",
+        f"[bold]Baseline:[/]  [cyan]{direct_base_url}[/] (no Sieve)",
+        f"[bold]Sieve:[/]     [cyan]{sieve_base_url}[/]",
+        "",
+    ]
+    if saved > 0:
+        headline_lines.extend([
+            f"[bold green]Sieve cut {saved:,} tokens per run ({pct:.1f}%)[/]",
+            f"[dim]That's {saved / len(summary.sieve.turns):.0f} fewer tokens per turn[/]"
+            f"[dim] on a 15-turn coding conversation.[/]",
+        ])
+    else:
+        headline_lines.append(
+            f"[bold red]Sieve added {-saved:,} tokens this run[/] "
+            "— check fixture sizing."
+        )
+    console.print(
+        Panel(
+            "\n".join(headline_lines),
+            title="Benchmark summary",
+            border_style="green" if saved > 0 else "red",
+        )
+    )
+    console.print(
+        "\n[dim]Run this yourself: [cyan]sieve benchmark --compare[/][/]"
     )
