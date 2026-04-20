@@ -994,12 +994,17 @@ def build_uninstall_screen(console) -> MenuScreen:
 # ── Public entry point ────────────────────────────────────────────────
 
 
-def run_wizard(console=None, clear_between_screens: bool = True) -> None:
+def run_wizard(console=None, clear_between_screens: bool = False) -> None:
     """Render the splash, build the top screen, enter the loop.
 
     The CLI calls this from:
     - ``sieve`` with no args + TTY
     - ``sieve wizard`` (explicit)
+
+    We deliberately do NOT clear the screen between menu transitions.
+    Clearing wipes the splash after the first redraw and also fights
+    terminal affordances (scrollback, copy-paste). Most mature CLI
+    wizards (`gh`, `npm init`, `pip`) scroll naturally; we match that.
     """
     if console is None:
         from rich.console import Console
