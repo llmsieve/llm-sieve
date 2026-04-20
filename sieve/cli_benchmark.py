@@ -893,21 +893,34 @@ def build_headline(
         runs_n = len(aggregated.runs)
         turns_n = len(aggregated.runs[0].sieve.turns) if aggregated.runs else 0
         recall_range = _recall_range(aggregated)
-        trap_str = (
-            "trap refused" if aggregated.all_traps_refused
-            else "trap mixed" if any(
-                x is True for x in aggregated.trap_absence_per_run
-            )
-            else "trap failed"
-        )
-        pct_str = (
-            f"{pct.mean:.0f}%" if pct.n <= 1 or pct.stddev == 0
-            else f"{pct.mean:.0f}% ± {pct.stddev:.0f}%"
-        )
+        if aggregated.all_traps_refused:
+            trap_str = "trap refused"
+        elif all(x is None for x in aggregated.trap_absence_per_run):
+            trap_str = "trap not reached"
+        elif any(x is True for x in aggregated.trap_absence_per_run):
+            trap_str = "trap mixed"
+        else:
+            trap_str = "trap failed"
         fixture_str = f" on the '{fixture}' fixture" if fixture else ""
         model_str = f" {model}" if model else ""
+        # Positive reduction (Sieve cut tokens) vs overhead (Sieve
+        # added tokens on a small baseline). Honest framing either
+        # way — never say "−-N% fewer".
+        if pct.mean >= 0:
+            pct_str = (
+                f"{pct.mean:.0f}%" if pct.n <= 1 or pct.stddev == 0
+                else f"{pct.mean:.0f}% ± {pct.stddev:.0f}%"
+            )
+            verb = f"Sieve sent {pct_str} fewer tokens"
+        else:
+            overhead = abs(pct.mean)
+            pct_str = (
+                f"{overhead:.0f}%" if pct.n <= 1 or pct.stddev == 0
+                else f"{overhead:.0f}% ± {pct.stddev:.0f}%"
+            )
+            verb = f"Sieve added {pct_str} more tokens than the baseline"
         return (
-            f"Sieve sent {pct_str} fewer tokens "
+            f"{verb} "
             f"({base.mean:,.0f} → {sie.mean:,.0f}) over "
             f"{runs_n} × {turns_n}-turn{model_str} conversations"
             f"{fixture_str}; "
@@ -1232,15 +1245,37 @@ def render_aggregated_compare_summary(
     saved_mean = agg.tokens_saved.mean
     pct_mean = agg.reduction_pct.mean
     pct_std = agg.reduction_pct.stddev
-    pct_str = (
-        f"−{pct_mean:.0f}%" if runs_n <= 1 or pct_std == 0
-        else f"−{pct_mean:.0f}% ± {pct_std:.0f}%"
-    )
+    if pct_mean >= 0:
+        # Reduction (the common case on medium / large / xlarge).
+        if runs_n <= 1 or pct_std == 0:
+            delta_cell = (
+                f"[bold green]−{pct_mean:.0f}%[/] "
+                f"([green]−{saved_mean:,.0f}[/])"
+            )
+        else:
+            delta_cell = (
+                f"[bold green]−{pct_mean:.0f}% ± {pct_std:.0f}%[/] "
+                f"([green]−{saved_mean:,.0f}[/])"
+            )
+    else:
+        # Sieve added tokens — only plausible on small/bare fixtures.
+        overhead_pct = abs(pct_mean)
+        overhead_tokens = -saved_mean
+        if runs_n <= 1 or pct_std == 0:
+            delta_cell = (
+                f"[yellow]+{overhead_pct:.0f}%[/] "
+                f"([yellow]+{overhead_tokens:,.0f}[/])"
+            )
+        else:
+            delta_cell = (
+                f"[yellow]+{overhead_pct:.0f}% ± {pct_std:.0f}%[/] "
+                f"([yellow]+{overhead_tokens:,.0f}[/])"
+            )
     results.add_row(
         "Tokens sent to LLM / run",
         base_tok,
         sie_tok,
-        f"[bold green]{pct_str}[/] ([green]−{saved_mean:,.0f}[/])",
+        delta_cell,
     )
     results.add_row(
         "Correct recalls  (Sieve)",
@@ -1252,7 +1287,11 @@ def render_aggregated_compare_summary(
         "[green]refused ✓[/]" if agg.all_traps_refused
         else "[red]failed ✗[/]" if any(
             x is False for x in agg.trap_absence_per_run
-        ) else "[yellow]mixed[/]"
+        )
+        else "[dim]not reached[/]" if all(
+            x is None for x in agg.trap_absence_per_run
+        )
+        else "[yellow]mixed[/]"
     )
     results.add_row(
         "Trap question  (Sieve)",
@@ -1598,14 +1637,23 @@ def render_aggregated_markdown(
     sie_tok = agg.sieve_outbound_tokens.render()
     pct_mean = agg.reduction_pct.mean
     pct_std = agg.reduction_pct.stddev
-    pct_str = (
-        f"−{pct_mean:.0f}%" if runs_n <= 1 or pct_std == 0
-        else f"−{pct_mean:.0f}% ± {pct_std:.0f}%"
-    )
     saved_mean = agg.tokens_saved.mean
+    if pct_mean >= 0:
+        pct_str = (
+            f"−{pct_mean:.0f}%" if runs_n <= 1 or pct_std == 0
+            else f"−{pct_mean:.0f}% ± {pct_std:.0f}%"
+        )
+        delta_md = f"**{pct_str}** (−{saved_mean:,.0f})"
+    else:
+        overhead_pct = abs(pct_mean)
+        pct_str = (
+            f"+{overhead_pct:.0f}%" if runs_n <= 1 or pct_std == 0
+            else f"+{overhead_pct:.0f}% ± {pct_std:.0f}%"
+        )
+        delta_md = f"**{pct_str}** (+{-saved_mean:,.0f})"
     lines.append(
         f"| **Tokens sent to LLM / run** | {base_tok} | {sie_tok} | "
-        f"**{pct_str}** (−{saved_mean:,.0f}) |"
+        f"{delta_md} |"
     )
     lines.append(
         f"| Correct recalls (Sieve) | — | {_recall_range(agg)} | — |"
@@ -1613,6 +1661,7 @@ def render_aggregated_markdown(
     trap_cell = (
         "refused ✓" if agg.all_traps_refused
         else "failed ✗" if any(x is False for x in agg.trap_absence_per_run)
+        else "not reached" if all(x is None for x in agg.trap_absence_per_run)
         else "mixed"
     )
     lines.append(
