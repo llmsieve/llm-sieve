@@ -175,8 +175,12 @@ class MenuApp:
             # Otherwise pick is an index into options.
             opt = top.options[pick]
             if not opt.enabled:
+                # Surface the per-option reason if the handler set one
+                # via the help text, so users aren't left wondering why.
+                reason = opt.help or ""
                 self._console.print(
-                    "[yellow]That option is disabled right now.[/]"
+                    f"[yellow]Option {pick + 1} isn't available right now.[/] "
+                    f"[dim]{reason}[/]".rstrip()
                 )
                 continue
             try:
@@ -226,9 +230,15 @@ class MenuApp:
             if opt.enabled:
                 key_style = "cyan"
                 label_style = ""
+                suffix = ""
             else:
-                key_style = "dim cyan"
-                label_style = "dim"
+                # Disabled options need to be OBVIOUSLY disabled.
+                # Dim alone is too subtle on many terminals — also
+                # render an explicit "(unavailable)" so anyone who
+                # can't see the colour still gets the signal.
+                key_style = "dim"
+                label_style = "dim strike"
+                suffix = " [dim](unavailable)[/]"
             # Assemble the line in pieces so we only emit rich tags
             # when there's a real style — an empty "[]...[/]" is
             # rejected by rich's markup parser.
@@ -237,7 +247,7 @@ class MenuApp:
                 label_part = f"[{label_style}]{opt.label}[/]"
             else:
                 label_part = opt.label
-            console.print(f"  {key_part} {label_part}")
+            console.print(f"  {key_part} {label_part}{suffix}")
             if opt.help:
                 console.print(f"        [dim]{opt.help}[/]")
 

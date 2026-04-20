@@ -159,19 +159,23 @@ def build_top_screen(console) -> MenuScreen:
         MenuOption(
             label="Benchmark — measure Sieve's value",
             handler=_benchmark_handler,
-            help="Runs a 15-turn baseline-vs-Sieve comparison.",
+            help=f"Runs a 15-turn baseline-vs-Sieve comparison. {needs_install_help}".strip(),
             enabled=installed,
         ),
         MenuOption(
             label="Demo — 6-turn scripted conversation",
             handler=_demo_handler,
-            help="Sandboxed; your main store is not touched.",
+            help=f"Sandboxed; your main store is not touched. {needs_install_help}".strip(),
             enabled=installed,
         ),
         MenuOption(
             label="Uninstall",
             handler=_uninstall_handler,
-            help="Stops the service, disables autostart, removes ~/.sieve.",
+            help=(
+                "Stops the service, disables autostart, removes ~/.sieve."
+                if installed
+                else "Nothing installed to uninstall."
+            ),
             enabled=installed,
         ),
         MenuOption(
