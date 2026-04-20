@@ -156,6 +156,7 @@ class TurnResult:
     elapsed_s: float
     absence_signal: bool | None  # None except on trap
     correct_recall: bool | None = None  # None except on retrieve/update
+    ttft_s: float = 0.0          # time to first streamed content token
     activation_phase: str = ""   # X-Sieve-Phase header, empty if missing
 
 
@@ -214,13 +215,49 @@ def _payload_tokens(payload: dict) -> int:
     return _approx(json.dumps(payload))
 
 
-def _default_wrap(user_message: str, model: str) -> dict:
-    """Single-mode payload: just the user turn."""
+def _default_wrap(user_message: str, model: str, history: list[dict], stream: bool) -> dict:
+    """Single-mode payload: history + user turn (no system prompt, no tools)."""
+    messages: list[dict] = list(history or [])
+    messages.append({"role": "user", "content": user_message})
     return {
         "model": model,
-        "messages": [{"role": "user", "content": user_message}],
-        "stream": False,
+        "messages": messages,
+        "stream": stream,
     }
+
+
+def _read_streamed_response(
+    r: httpx.Response, t_start: float
+) -> tuple[str, float]:
+    """Consume an Ollama NDJSON stream. Returns (full_text, ttft_s).
+
+    ``ttft_s`` is the wall-clock from request-send to first non-empty
+    content chunk. When the upstream never emits content (unlikely on
+    an Ollama proxy), ttft_s == total_elapsed.
+    """
+    import json
+    import time
+
+    pieces: list[str] = []
+    ttft: float | None = None
+    for line in r.iter_lines():
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # Ollama stream shape: {"message": {"role":"assistant","content": "…"}, "done": false}
+        msg = obj.get("message") or {}
+        chunk = (msg.get("content") or "")
+        if chunk:
+            if ttft is None:
+                ttft = time.perf_counter() - t_start
+            pieces.append(chunk)
+        if obj.get("done"):
+            break
+    total = time.perf_counter() - t_start
+    return ("".join(pieces)).strip(), (ttft if ttft is not None else total)
 
 
 def run_benchmark(
@@ -229,12 +266,21 @@ def run_benchmark(
     model: str,
     store_fact_count: Callable[[], int],
     transport: httpx.BaseTransport | None = None,
-    timeout: float = 90.0,
+    timeout: float = 120.0,
     messages: Iterable[dict] = BENCHMARK_MESSAGES,
-    wrap_payload: Callable[[str, str], dict] | None = None,
+    wrap_payload: Callable[[str, str, list[dict], bool], dict] | None = None,
     use_sieve_headers: bool = True,
+    stream: bool = True,
+    grade_recall: Callable[[int, str, str, str], bool | None] | None = None,
+    grade_trap: Callable[[str, str], bool] | None = None,
 ) -> BenchmarkSummary:
     """Drive the scripted conversation through a live endpoint.
+
+    Threads history across turns: turn N's request includes all prior
+    user+assistant messages from this run. This is what a real
+    conversational agent does. On the baseline pass the context grows
+    linearly with turn count; the Sieve pass relies on the proxy to
+    compress it back down.
 
     Parameters
     ----------
@@ -254,10 +300,11 @@ def run_benchmark(
     messages
         Override the script. Default is BENCHMARK_MESSAGES.
     wrap_payload
-        Callable ``(user_message, model) -> dict`` that builds the
-        outgoing payload. Default is a bare user-turn (single mode).
-        For compare mode pass ``build_agent_payload`` from
-        ``sieve._agent_fixture``.
+        Callable ``(user_message, model, history, stream) -> dict``
+        that builds the outgoing payload. ``history`` is the
+        accumulated user+assistant messages from prior turns in this
+        run. Default is a bare message-list (single mode). For compare
+        mode pass ``build_agent_payload`` from ``sieve._agent_fixture``.
     use_sieve_headers
         When True, inbound/outbound token counts are read from
         ``X-Sieve-Inbound-Tokens`` / ``X-Sieve-Outbound-Tokens``
@@ -265,6 +312,19 @@ def run_benchmark(
         is the Sieve proxy). When False (baseline runs hitting the
         LLM directly), both counts are computed client-side from the
         outgoing payload, and outbound == inbound.
+    stream
+        When True, requests streamed responses (Ollama NDJSON /
+        OpenAI SSE) and measures time-to-first-token. Default True.
+        Tests may pass False with MockTransport.
+    grade_recall
+        Optional ``(turn_index, prompt, response, expected_hint) ->
+        bool|None`` grader. Returns None for non-gradable turns
+        (introduce / deep). Default is the keyword heuristic
+        ``response_recalls``.
+    grade_trap
+        Optional ``(prompt, response) -> bool`` grader for the trap
+        turn. Default is the keyword heuristic
+        ``looks_like_absence_signal``.
     """
     results: list[TurnResult] = []
     messages = list(messages)
@@ -276,18 +336,35 @@ def run_benchmark(
     if transport is not None:
         client_kwargs["transport"] = transport
 
+    # Accumulated conversation history for this run — grows after
+    # every completed turn. Passed to ``wrap`` so each request sees
+    # the full prior exchange (the realistic agent shape).
+    history: list[dict] = []
+
     with httpx.Client(**client_kwargs) as client:
         for i, msg in enumerate(messages, start=1):
             facts_before = store_fact_count()
-            payload = wrap(msg["content"], model)
+            payload = wrap(msg["content"], model, history, stream)
             import time
             t0 = time.perf_counter()
-            r = client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
-            elapsed = time.perf_counter() - t0
-            r.raise_for_status()
-
-            data = r.json() if r.content else {}
-            response_text = ((data.get("message") or {}).get("content") or "").strip()
+            if stream:
+                req = client.build_request(
+                    "POST", f"{base_url.rstrip('/')}/api/chat", json=payload,
+                )
+                r = client.send(req, stream=True)
+                try:
+                    r.raise_for_status()
+                    response_text, ttft = _read_streamed_response(r, t0)
+                finally:
+                    r.close()
+                elapsed = time.perf_counter() - t0
+            else:
+                r = client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
+                elapsed = time.perf_counter() - t0
+                r.raise_for_status()
+                data = r.json() if r.content else {}
+                response_text = ((data.get("message") or {}).get("content") or "").strip()
+                ttft = elapsed
 
             if use_sieve_headers:
                 inbound = int(r.headers.get("X-Sieve-Inbound-Tokens", "0")) or _payload_tokens(payload)
@@ -301,10 +378,21 @@ def run_benchmark(
 
             facts_after = store_fact_count()
 
+            # Grade trap / recall.
             absence = None
             if msg["phase"] == "trap":
-                absence = looks_like_absence_signal(response_text)
-            correct = response_recalls(i, response_text)
+                grader = grade_trap or (lambda _p, resp: looks_like_absence_signal(resp))
+                absence = grader(msg["content"], response_text)
+
+            # Recall grader: for retrieve/update turns. Default is the
+            # keyword heuristic; LLM-based grader is injected by the CLI.
+            if grade_recall is not None:
+                # Hint is a short description of the expected answer,
+                # built from RECALL_EXPECTATIONS when available.
+                hint = " / ".join(RECALL_EXPECTATIONS.get(i, ()))
+                correct = grade_recall(i, msg["content"], response_text, hint)
+            else:
+                correct = response_recalls(i, response_text)
 
             results.append(TurnResult(
                 index=i,
@@ -316,10 +404,17 @@ def run_benchmark(
                 facts_before=facts_before,
                 facts_after=facts_after,
                 elapsed_s=elapsed,
+                ttft_s=ttft,
                 absence_signal=absence,
                 correct_recall=correct,
                 activation_phase=activation_phase,
             ))
+
+            # Append this turn to history for the NEXT request. Real
+            # agents do this; it's what drives baseline bloat.
+            history.append({"role": "user", "content": msg["content"]})
+            if response_text:
+                history.append({"role": "assistant", "content": response_text})
 
     total_inbound = sum(t.inbound_tokens for t in results)
     total_outbound = sum(t.outbound_tokens for t in results)
@@ -352,6 +447,9 @@ def run_benchmark_compare(
     transport: httpx.BaseTransport | None = None,
     timeout: float = 120.0,
     messages: Iterable[dict] = BENCHMARK_MESSAGES,
+    stream: bool = True,
+    grade_recall: Callable[[int, str, str, str], bool | None] | None = None,
+    grade_trap: Callable[[str, str], bool] | None = None,
 ) -> CompareSummary:
     """Two-pass benchmark: baseline (direct) then Sieve (proxy).
 
@@ -374,6 +472,9 @@ def run_benchmark_compare(
     """
     from sieve._agent_fixture import build_agent_payload
 
+    def _agent_wrap(user: str, mdl: str, history: list[dict], strm: bool) -> dict:
+        return build_agent_payload(user, mdl, history=history, stream=strm)
+
     # Pass 1 — baseline, direct to LLM.
     baseline_summary = run_benchmark(
         base_url=direct_base_url,
@@ -382,8 +483,11 @@ def run_benchmark_compare(
         transport=transport,
         timeout=timeout,
         messages=messages,
-        wrap_payload=build_agent_payload,
+        wrap_payload=_agent_wrap,
         use_sieve_headers=False,
+        stream=stream,
+        grade_recall=grade_recall,
+        grade_trap=grade_trap,
     )
 
     # Clear any bleed-through between passes. The baseline pass
@@ -399,8 +503,11 @@ def run_benchmark_compare(
         transport=transport,
         timeout=timeout,
         messages=messages,
-        wrap_payload=build_agent_payload,
+        wrap_payload=_agent_wrap,
         use_sieve_headers=True,
+        stream=stream,
+        grade_recall=grade_recall,
+        grade_trap=grade_trap,
     )
 
     return CompareSummary(
@@ -559,11 +666,16 @@ def render_summary(
         (summary.total_outbound - summary.total_inbound) / len(summary.turns)
         if summary.turns else 0.0
     )
+    avg_ttft = _avg([t.ttft_s for t in summary.turns if t.ttft_s > 0])
     if avg_overhead > 0:
         token_lines = [
             f"[dim]Inbound (bare chat):[/]   {summary.total_inbound:,} tokens",
             f"[dim]Outbound (with Sieve):[/] {summary.total_outbound:,} tokens",
             f"[dim]Proxy overhead:[/]        ~{avg_overhead:.0f} tokens / turn",
+        ]
+        if avg_ttft > 0:
+            token_lines.append(f"[dim]Avg TTFT:[/]              {avg_ttft:.1f}s")
+        token_lines += [
             "",
             "[dim]Single-mode sends bare user turns; Sieve adds its lean prompt",
             "and recall tool. To see reduction vs a real agent payload, run:[/]",
@@ -580,6 +692,8 @@ def render_summary(
             f"Outbound:  {summary.total_outbound:,} tokens",
             f"Reduction: [green]{reduction:.1f}%[/]",
         ]
+        if avg_ttft > 0:
+            token_lines.append(f"Avg TTFT:  {avg_ttft:.1f}s")
     console.print(
         Panel(
             "\n".join(token_lines),
@@ -587,7 +701,89 @@ def render_summary(
             border_style="dim",
         )
     )
-    console.print("\n[dim]For token-reduction proof: [cyan]sieve benchmark --compare[/][/]")
+
+    # Headline — plain text, paste-able into READMEs / reports.
+    console.print(
+        f"\n[bold]{build_headline(single=summary)}[/]"
+    )
+    console.print(
+        "[dim]For token-reduction proof: [cyan]sieve benchmark --compare[/][/]"
+    )
+
+
+def _avg(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def build_headline(
+    *,
+    summary: CompareSummary | None = None,
+    single: BenchmarkSummary | None = None,
+    pricing_tier: str = "local",
+) -> str:
+    """One-line marketing-ready summary.
+
+    Used both in the CLI render and by ``--format json/markdown``.
+    Always plain text — no rich markup. Safe to paste into a README.
+
+    In compare mode:
+        "Sieve cut this agent's tokens by 63% (−15,241 tokens, saved
+         $0.23 on Claude Sonnet) while answering 6/6 recall questions
+         correctly."
+
+    In single mode:
+        "Sieve answered 6/6 recall questions correctly and refused on
+         the trap, using 8,979 tokens over 15 turns."
+    """
+    from sieve._pricing import dollars_saved, tier_label
+
+    if summary is not None:
+        saved = summary.tokens_saved
+        pct = summary.reduction_pct
+        dollars = dollars_saved(saved, pricing_tier)
+        recalls = (
+            f"{summary.sieve.correct_recalls}/{summary.sieve.gradable_recalls}"
+            if summary.sieve.gradable_recalls else "—"
+        )
+        trap_mark = (
+            " and refused on the trap"
+            if summary.sieve.trap_absence_signal is True
+            else ""
+        )
+        parts: list[str] = []
+        if saved > 0:
+            parts.append(
+                f"Sieve cut this agent's tokens by {pct:.0f}% "
+                f"(−{saved:,} tokens"
+            )
+            if dollars > 0:
+                parts[-1] += f", saved ${dollars:.2f} on {tier_label(pricing_tier).split(' (')[0]}"
+            parts[-1] += ")"
+        else:
+            parts.append(f"Sieve added {-saved:,} tokens this run")
+        if summary.sieve.gradable_recalls:
+            parts.append(f"while answering {recalls} recall questions correctly")
+        parts.append(trap_mark.strip() if trap_mark.strip() else "")
+        text = " ".join(p for p in parts if p).rstrip(",. ") + "."
+        return text
+
+    if single is not None:
+        recalls = (
+            f"{single.correct_recalls}/{single.gradable_recalls}"
+            if single.gradable_recalls else "—"
+        )
+        trap_mark = (
+            " and refused on the trap"
+            if single.trap_absence_signal is True
+            else ""
+        )
+        return (
+            f"Sieve answered {recalls} recall questions correctly"
+            f"{trap_mark}, using {single.total_outbound:,} tokens "
+            f"over {len(single.turns)} turns."
+        )
+
+    return ""
 
 
 def render_compare_summary(
@@ -597,25 +793,32 @@ def render_compare_summary(
     sieve_base_url: str,
     direct_base_url: str,
     console,
+    pricing_tier: str = "local",
 ) -> None:
-    """Side-by-side rendering for --compare runs.
+    """Rich rendering for --compare runs.
 
-    The headline is tokens-saved. The memory-features story lives in
-    a secondary panel since it's primarily a property of the Sieve
-    pass.
+    The headline is tokens-saved + correct-recalls. Surfaces:
+      * side-by-side token, TTFT, and total-latency totals
+      * per-turn baseline context-growth sparkline (the bloat curve)
+      * cost panel when a paid pricing tier is selected
+      * side-by-side model responses on illustrative turns (the wow)
+      * one-line headline at the bottom
     """
     from rich.table import Table
     from rich.panel import Panel
+    from sieve._pricing import dollars_saved, price_for, tier_label
+    from sieve._sparkline import sparkline
 
-    # Side-by-side totals.
     saved = summary.tokens_saved
     pct = summary.reduction_pct
 
+    # ── Baseline vs Sieve headline table ───────────────────────────
     token_table = Table(title="Baseline vs Sieve", show_lines=False)
     token_table.add_column("Metric")
     token_table.add_column("Baseline (direct)", justify="right")
     token_table.add_column("With Sieve", justify="right")
     token_table.add_column("Δ", justify="right")
+
     token_table.add_row(
         "Tokens sent to LLM",
         f"{summary.baseline_tokens:,}",
@@ -625,23 +828,87 @@ def render_compare_summary(
             else f"[red]+{-saved:,}[/]"
         ),
     )
-    baseline_avg_latency = (
-        sum(t.elapsed_s for t in summary.baseline.turns) / len(summary.baseline.turns)
-        if summary.baseline.turns else 0.0
-    )
-    sieve_avg_latency = (
-        sum(t.elapsed_s for t in summary.sieve.turns) / len(summary.sieve.turns)
-        if summary.sieve.turns else 0.0
-    )
+
+    # Time to first token — perceived-speed metric. Sieve sends a
+    # smaller payload so the LLM starts generating sooner.
+    baseline_avg_ttft = _avg([t.ttft_s for t in summary.baseline.turns if t.ttft_s > 0])
+    sieve_avg_ttft = _avg([t.ttft_s for t in summary.sieve.turns if t.ttft_s > 0])
+    if baseline_avg_ttft > 0 or sieve_avg_ttft > 0:
+        ttft_delta = sieve_avg_ttft - baseline_avg_ttft
+        ttft_color = "green" if ttft_delta < 0 else "red"
+        token_table.add_row(
+            "Time to first token",
+            f"{baseline_avg_ttft:.1f}s",
+            f"{sieve_avg_ttft:.1f}s",
+            f"[{ttft_color}]{ttft_delta:+.1f}s[/]",
+        )
+
+    baseline_avg_total = _avg([t.elapsed_s for t in summary.baseline.turns])
+    sieve_avg_total = _avg([t.elapsed_s for t in summary.sieve.turns])
     token_table.add_row(
-        "Avg latency / turn",
-        f"{baseline_avg_latency:.1f}s",
-        f"{sieve_avg_latency:.1f}s",
-        f"{(sieve_avg_latency - baseline_avg_latency):+.1f}s",
+        "Avg wall-clock / turn",
+        f"{baseline_avg_total:.1f}s",
+        f"{sieve_avg_total:.1f}s",
+        f"{(sieve_avg_total - baseline_avg_total):+.1f}s",
     )
     console.print(token_table)
 
-    # Memory features — Sieve-only (baseline has no store).
+    # ── Context-growth sparkline ───────────────────────────────────
+    # Baseline's per-turn inbound token count shows how conversation
+    # history accumulates. Sieve's stays roughly constant because the
+    # proxy trims history. Rendered as a one-line sparkline so the
+    # shape is visible without a chart.
+    baseline_inb = [t.inbound_tokens for t in summary.baseline.turns]
+    sieve_out = [t.outbound_tokens for t in summary.sieve.turns]
+    if baseline_inb and sieve_out:
+        base_bar = sparkline(baseline_inb)
+        sieve_bar = sparkline(sieve_out)
+        console.print(
+            Panel(
+                "\n".join([
+                    f"[red]baseline[/]  {base_bar}  "
+                    f"[dim]turn 1: {baseline_inb[0]:,} → turn {len(baseline_inb)}: "
+                    f"{baseline_inb[-1]:,} tokens[/]",
+                    f"[green]sieve   [/]  {sieve_bar}  "
+                    f"[dim]turn 1: {sieve_out[0]:,} → turn {len(sieve_out)}: "
+                    f"{sieve_out[-1]:,} tokens[/]",
+                ]),
+                title="Per-turn context size (the bloat curve)",
+                border_style="dim",
+            )
+        )
+
+    # ── Side-by-side illustrative responses ────────────────────────
+    # Pick 3 turns that contrast well: first recall (turn 4), update
+    # recall (turn 14), trap (turn 15). Skip silently if a turn is
+    # missing from either pass (defensive; shouldn't happen).
+    illustrative_indices = [4, 14, 15]
+    resp_table = Table(
+        title="Model responses (selected turns)", show_lines=True,
+    )
+    resp_table.add_column("#", justify="right", style="dim", width=3)
+    resp_table.add_column("Question", max_width=30)
+    resp_table.add_column("Baseline (no Sieve)", max_width=50)
+    resp_table.add_column("With Sieve", max_width=50)
+    rows_added = 0
+    for idx in illustrative_indices:
+        b = next((t for t in summary.baseline.turns if t.index == idx), None)
+        s = next((t for t in summary.sieve.turns if t.index == idx), None)
+        if b is None or s is None:
+            continue
+        baseline_verdict = _turn_verdict_mark(b)
+        sieve_verdict = _turn_verdict_mark(s)
+        resp_table.add_row(
+            str(idx),
+            b.prompt,
+            f"{baseline_verdict} {_clip(b.response, 280)}",
+            f"{sieve_verdict} {_clip(s.response, 280)}",
+        )
+        rows_added += 1
+    if rows_added:
+        console.print(resp_table)
+
+    # ── Memory-features panel (Sieve pass only) ────────────────────
     recall_line = (
         f"[green]{summary.sieve.correct_recalls}/{summary.sieve.gradable_recalls}[/]"
         if summary.sieve.gradable_recalls else "—"
@@ -665,27 +932,36 @@ def render_compare_summary(
         )
     )
 
-    # Summary panel.
-    headline_lines = [
+    # ── Cost panel (only when a paid tier was selected) ────────────
+    if price_for(pricing_tier) > 0 and saved > 0:
+        saved_one = dollars_saved(saved, pricing_tier)
+        saved_1k = saved_one * 1_000
+        console.print(
+            Panel(
+                "\n".join([
+                    f"[bold]Pricing model:[/]  {tier_label(pricing_tier)}",
+                    f"[bold]This run:[/]       [green]${saved_one:.4f}[/] saved",
+                    f"[bold]Per 1K runs:[/]    [green]${saved_1k:,.2f}[/] saved",
+                    "",
+                    "[dim]Based on input-token pricing only; response "
+                    "tokens are identical in both passes.[/]",
+                ]),
+                title="Estimated savings",
+                border_style="green",
+            )
+        )
+
+    # ── Summary panel + headline ───────────────────────────────────
+    sub_lines = [
         f"[bold]Model:[/]     [cyan]{model}[/]",
         f"[bold]Baseline:[/]  [cyan]{direct_base_url}[/] (no Sieve)",
         f"[bold]Sieve:[/]     [cyan]{sieve_base_url}[/]",
         "",
+        build_headline(summary=summary, pricing_tier=pricing_tier),
     ]
-    if saved > 0:
-        headline_lines.extend([
-            f"[bold green]Sieve cut {saved:,} tokens per run ({pct:.1f}%)[/]",
-            f"[dim]That's {saved / len(summary.sieve.turns):.0f} fewer tokens per turn[/]"
-            f"[dim] on a 15-turn coding conversation.[/]",
-        ])
-    else:
-        headline_lines.append(
-            f"[bold red]Sieve added {-saved:,} tokens this run[/] "
-            "— check fixture sizing."
-        )
     console.print(
         Panel(
-            "\n".join(headline_lines),
+            "\n".join(sub_lines),
             title="Benchmark summary",
             border_style="green" if saved > 0 else "red",
         )
@@ -693,3 +969,225 @@ def render_compare_summary(
     console.print(
         "\n[dim]Run this yourself: [cyan]sieve benchmark --compare[/][/]"
     )
+
+
+def _turn_verdict_mark(t: TurnResult) -> str:
+    """Compact ✓/✗ marker for a turn's grading outcome."""
+    if t.phase == "trap":
+        if t.absence_signal is True:
+            return "[green]✓[/]"
+        if t.absence_signal is False:
+            return "[red]✗[/]"
+        return ""
+    if t.correct_recall is True:
+        return "[green]✓[/]"
+    if t.correct_recall is False:
+        return "[red]✗[/]"
+    return ""
+
+
+def _clip(text: str, max_len: int) -> str:
+    """Truncate with ellipsis so the response cell stays readable."""
+    text = (text or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+# ── Machine-readable output ──────────────────────────────────────────────
+
+
+def summary_to_dict(
+    summary: CompareSummary | BenchmarkSummary,
+    *,
+    model: str,
+    pricing_tier: str = "local",
+) -> dict:
+    """Convert a summary to a JSON-serialisable dict.
+
+    Used by ``--format json`` and as the data source for the
+    markdown formatter. Callers merge in their own context (run
+    timestamp, base URLs) as needed.
+    """
+    from sieve._pricing import dollars_saved, price_for
+
+    def _turn_dict(t: TurnResult) -> dict:
+        return {
+            "index": t.index,
+            "phase": t.phase,
+            "prompt": t.prompt,
+            "response": t.response,
+            "inbound_tokens": t.inbound_tokens,
+            "outbound_tokens": t.outbound_tokens,
+            "facts_before": t.facts_before,
+            "facts_after": t.facts_after,
+            "elapsed_s": round(t.elapsed_s, 3),
+            "ttft_s": round(t.ttft_s, 3),
+            "absence_signal": t.absence_signal,
+            "correct_recall": t.correct_recall,
+            "activation_phase": t.activation_phase,
+        }
+
+    if isinstance(summary, CompareSummary):
+        saved = summary.tokens_saved
+        return {
+            "mode": "compare",
+            "model": model,
+            "pricing_tier": pricing_tier,
+            "baseline_tokens": summary.baseline_tokens,
+            "sieve_outbound_tokens": summary.sieve_outbound_tokens,
+            "sieve_inbound_tokens": summary.sieve_inbound_tokens,
+            "tokens_saved": saved,
+            "reduction_pct": round(summary.reduction_pct, 2),
+            "dollars_saved_per_run": (
+                round(dollars_saved(saved, pricing_tier), 6)
+                if price_for(pricing_tier) > 0 else 0.0
+            ),
+            "dollars_saved_per_1k_runs": (
+                round(dollars_saved(saved, pricing_tier) * 1000, 4)
+                if price_for(pricing_tier) > 0 else 0.0
+            ),
+            "headline": build_headline(summary=summary, pricing_tier=pricing_tier),
+            "baseline": {
+                "facts_learned": summary.baseline.facts_learned,
+                "correct_recalls": summary.baseline.correct_recalls,
+                "gradable_recalls": summary.baseline.gradable_recalls,
+                "trap_absence_signal": summary.baseline.trap_absence_signal,
+                "turns": [_turn_dict(t) for t in summary.baseline.turns],
+            },
+            "sieve": {
+                "facts_learned": summary.sieve.facts_learned,
+                "correct_recalls": summary.sieve.correct_recalls,
+                "gradable_recalls": summary.sieve.gradable_recalls,
+                "trap_absence_signal": summary.sieve.trap_absence_signal,
+                "turns": [_turn_dict(t) for t in summary.sieve.turns],
+            },
+        }
+
+    # Single-mode BenchmarkSummary.
+    return {
+        "mode": "single",
+        "model": model,
+        "total_inbound": summary.total_inbound,
+        "total_outbound": summary.total_outbound,
+        "facts_learned": summary.facts_learned,
+        "correct_recalls": summary.correct_recalls,
+        "gradable_recalls": summary.gradable_recalls,
+        "trap_absence_signal": summary.trap_absence_signal,
+        "headline": build_headline(single=summary),
+        "turns": [_turn_dict(t) for t in summary.turns],
+    }
+
+
+def render_markdown(
+    summary: CompareSummary | BenchmarkSummary,
+    *,
+    model: str,
+    sieve_base_url: str,
+    direct_base_url: str = "",
+    pricing_tier: str = "local",
+) -> str:
+    """Return a markdown summary suitable for README / blog paste.
+
+    Leads with the headline, then a tokens table, recalls, trap
+    verdict, and a per-turn table. Markdown is the canonical "paste
+    me somewhere" format.
+    """
+    from sieve._pricing import dollars_saved, price_for, tier_label
+
+    lines: list[str] = []
+
+    if isinstance(summary, CompareSummary):
+        saved = summary.tokens_saved
+        pct = summary.reduction_pct
+        lines.append(f"## Sieve benchmark — {model}")
+        lines.append("")
+        lines.append(f"> {build_headline(summary=summary, pricing_tier=pricing_tier)}")
+        lines.append("")
+        lines.append("| Metric | Baseline (direct) | With Sieve | Δ |")
+        lines.append("|---|---:|---:|---:|")
+        lines.append(
+            f"| Tokens sent to LLM | {summary.baseline_tokens:,} "
+            f"| {summary.sieve_outbound_tokens:,} "
+            f"| **−{saved:,} ({pct:.1f}%)** |"
+        )
+        b_ttft = _avg([t.ttft_s for t in summary.baseline.turns if t.ttft_s > 0])
+        s_ttft = _avg([t.ttft_s for t in summary.sieve.turns if t.ttft_s > 0])
+        if b_ttft > 0 or s_ttft > 0:
+            lines.append(
+                f"| Time to first token | {b_ttft:.1f}s | {s_ttft:.1f}s | "
+                f"{(s_ttft - b_ttft):+.1f}s |"
+            )
+        b_total = _avg([t.elapsed_s for t in summary.baseline.turns])
+        s_total = _avg([t.elapsed_s for t in summary.sieve.turns])
+        lines.append(
+            f"| Avg wall-clock / turn | {b_total:.1f}s | {s_total:.1f}s "
+            f"| {(s_total - b_total):+.1f}s |"
+        )
+        lines.append("")
+        lines.append(
+            f"**Facts learned (Sieve):** {summary.sieve.facts_learned}  "
+        )
+        if summary.sieve.gradable_recalls:
+            lines.append(
+                f"**Correct recalls (Sieve):** "
+                f"{summary.sieve.correct_recalls}/{summary.sieve.gradable_recalls}  "
+            )
+        trap = summary.sieve.trap_absence_signal
+        if trap is True:
+            lines.append("**Trap query (Sieve):** absence signal fired ✓")
+        elif trap is False:
+            lines.append("**Trap query (Sieve):** hallucinated ✗")
+        lines.append("")
+        if price_for(pricing_tier) > 0 and saved > 0:
+            per_run = dollars_saved(saved, pricing_tier)
+            per_k = per_run * 1_000
+            lines.append(
+                f"**Savings ({tier_label(pricing_tier)}):** "
+                f"${per_run:.4f} per run, ${per_k:,.2f} per 1K runs."
+            )
+            lines.append("")
+        # Per-turn table.
+        lines.append("### Per-turn")
+        lines.append("")
+        lines.append(
+            "| # | Phase | Baseline tokens | Sieve tokens | "
+            "Recall (baseline) | Recall (sieve) |"
+        )
+        lines.append("|---:|---|---:|---:|:---:|:---:|")
+        for b, s in zip(summary.baseline.turns, summary.sieve.turns):
+            def _mk(t: TurnResult) -> str:
+                if t.phase == "trap":
+                    if t.absence_signal is True:
+                        return "✓"
+                    if t.absence_signal is False:
+                        return "✗"
+                    return ""
+                if t.correct_recall is True:
+                    return "✓"
+                if t.correct_recall is False:
+                    return "✗"
+                return ""
+            lines.append(
+                f"| {b.index} | {b.phase} | {b.inbound_tokens:,} "
+                f"| {s.outbound_tokens:,} | {_mk(b)} | {_mk(s)} |"
+            )
+        return "\n".join(lines) + "\n"
+
+    # Single-mode
+    lines.append(f"## Sieve benchmark — {model}")
+    lines.append("")
+    lines.append(f"> {build_headline(single=summary)}")
+    lines.append("")
+    lines.append(f"**Facts learned:** {summary.facts_learned}  ")
+    if summary.gradable_recalls:
+        lines.append(
+            f"**Correct recalls:** "
+            f"{summary.correct_recalls}/{summary.gradable_recalls}  "
+        )
+    trap = summary.trap_absence_signal
+    if trap is True:
+        lines.append("**Trap query:** absence signal fired ✓")
+    elif trap is False:
+        lines.append("**Trap query:** hallucinated ✗")
+    return "\n".join(lines) + "\n"

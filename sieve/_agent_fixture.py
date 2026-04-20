@@ -196,61 +196,36 @@ AGENT_TOOLS = [
 ]
 
 
-# Four turns of plausible prior conversation — enough to demonstrate
-# that Sieve's history-trim also kicks in, not just the system-prompt
-# strip.
-AGENT_HISTORY = [
-    {
-        "role": "user",
-        "content": (
-            "I'm working on a Python CLI project that uses sqlite for "
-            "local storage. Can you help me understand the layout?"
-        ),
-    },
-    {
-        "role": "assistant",
-        "content": (
-            "Happy to help. I can start by reading the project "
-            "structure and the main entry point. Do you want me to "
-            "focus on the CLI surface, the storage layer, or both?"
-        ),
-    },
-    {
-        "role": "user",
-        "content": (
-            "Both, but start with the storage layer. I'm specifically "
-            "trying to understand how embeddings are persisted and "
-            "retrieved."
-        ),
-    },
-    {
-        "role": "assistant",
-        "content": (
-            "Got it. I'll look at the store module first and then "
-            "trace how the retrieval layer consumes it. Give me a "
-            "moment to read the code."
-        ),
-    },
-]
-
-
-def build_agent_payload(user_message: str, model: str) -> dict:
+def build_agent_payload(
+    user_message: str,
+    model: str,
+    history: list[dict] | None = None,
+    stream: bool = False,
+) -> dict:
     """Wrap a single user turn inside an agent-shaped payload.
 
     The returned dict mimics what a real coding agent POSTs to an
     OpenAI-compatible or Ollama-compatible chat endpoint: long system
-    prompt, tool schemas, prior history, the new user message.
+    prompt, tool schemas, prior conversation history, the new user
+    message.
 
-    Used by ``sieve benchmark --compare`` to produce realistic
-    before/after token counts.
+    ``history`` is the accumulated user+assistant messages from
+    previous turns in THIS benchmark run. A real conversational agent
+    ships growing history with every request — that's exactly the
+    bloat Sieve compresses. The baseline pass sees this grow linearly;
+    the Sieve pass has the proxy strip it back to the last N turns.
+
+    Pass ``history=[]`` (or omit) on the first turn.
     """
+    messages: list[dict] = [
+        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+    ]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
     return {
         "model": model,
-        "messages": [
-            {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-            *AGENT_HISTORY,
-            {"role": "user", "content": user_message},
-        ],
+        "messages": messages,
         "tools": AGENT_TOOLS,
-        "stream": False,
+        "stream": stream,
     }

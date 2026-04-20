@@ -134,7 +134,13 @@ class FakeProxy:
         body = json.loads(request.content.decode())
         turn_idx = len(self.calls)
         self.calls.append(body)
-        user_content = body["messages"][0]["content"]
+        # The current user message is always the LAST user message in
+        # the messages array (history from prior turns precedes it).
+        user_content = ""
+        for m in reversed(body["messages"]):
+            if m.get("role") == "user":
+                user_content = m.get("content", "")
+                break
 
         # Work out phase from BENCHMARK_MESSAGES at this position so the fake
         # mimics the real script.
@@ -167,6 +173,7 @@ def _run_with_fake(fake: FakeProxy) -> BenchmarkSummary:
         store_fact_count=lambda: fake.facts,
         transport=transport,
         timeout=5.0,
+        stream=False,
     )
 
 
@@ -307,6 +314,7 @@ def test_run_benchmark_falls_back_to_char_count_when_header_missing():
         store_fact_count=lambda: 0,
         transport=transport,
         timeout=5.0,
+        stream=False,
     )
     # Every turn should have a non-zero approximation
     assert all(t.inbound_tokens > 0 for t in summary.turns)
@@ -367,3 +375,219 @@ def test_render_summary_flags_fabrication():
     render_summary(summary, model="m", base_url="http://p", console=console)
     out = buf.getvalue()
     assert "no absence signal detected" in out
+
+
+# ── History threading ───────────────────────────────────────────────────
+
+
+def test_run_benchmark_threads_history_across_turns():
+    """Turn N's request should contain N-1 prior user+assistant exchanges.
+
+    Real agents ship growing history; the baseline pass is supposed to
+    demonstrate that bloat.
+    """
+    fake = FakeProxy(
+        inbound_by_turn=[100] * 15,
+        outbound_by_turn=[50] * 15,
+        responses_by_phase={
+            "introduce": "Got it.", "retrieve": "Answer.", "deep": "Answer.",
+            "update": "Understood.", "trap": "I don't know.",
+        },
+    )
+    _run_with_fake(fake)
+    # Turn 1: just the current user message.
+    first = fake.calls[0]["messages"]
+    assert len([m for m in first if m.get("role") == "user"]) == 1
+    # Turn 5: 5 user messages (turns 1-5) and 4 assistant replies (turns 1-4).
+    fifth = fake.calls[4]["messages"]
+    user_count = sum(1 for m in fifth if m.get("role") == "user")
+    asst_count = sum(1 for m in fifth if m.get("role") == "assistant")
+    assert user_count == 5
+    assert asst_count == 4
+    # Last message should always be the new user turn.
+    assert fifth[-1]["role"] == "user"
+
+
+# ── LLM-grader pluggability ─────────────────────────────────────────────
+
+
+def test_run_benchmark_respects_injected_recall_grader():
+    """grade_recall hook replaces the default keyword heuristic."""
+    fake = FakeProxy(
+        inbound_by_turn=[100] * 15,
+        outbound_by_turn=[50] * 15,
+        responses_by_phase={
+            "introduce": "Got it.", "retrieve": "Nonsense answer.",
+            "deep": "Answer.", "update": "Understood.", "trap": "I don't know.",
+        },
+    )
+    transport = httpx.MockTransport(fake.handler)
+    # Grader always returns True; should override the keyword heuristic
+    # that would have failed on "Nonsense answer."
+    always_yes = lambda i, q, r, h: True if h else None
+    summary = run_benchmark(
+        base_url="http://fake-proxy",
+        model="test-model",
+        store_fact_count=lambda: fake.facts,
+        transport=transport,
+        timeout=5.0,
+        stream=False,
+        grade_recall=always_yes,
+    )
+    # 6 gradable turns (4,5,6,7,8,14), all marked correct by injected grader.
+    assert summary.gradable_recalls == 6
+    assert summary.correct_recalls == 6
+
+
+def test_run_benchmark_respects_injected_trap_grader():
+    fake = FakeProxy(
+        inbound_by_turn=[100] * 15,
+        outbound_by_turn=[50] * 15,
+        responses_by_phase={
+            # Response LOOKS like fabrication (would fail the heuristic)…
+            "introduce": "ok", "retrieve": "ok", "deep": "ok", "update": "ok",
+            "trap": "Jordan works at Apple.",
+        },
+    )
+    transport = httpx.MockTransport(fake.handler)
+    # …but injected grader overrides.
+    summary = run_benchmark(
+        base_url="http://fake-proxy",
+        model="test-model",
+        store_fact_count=lambda: fake.facts,
+        transport=transport,
+        timeout=5.0,
+        stream=False,
+        grade_trap=lambda q, r: True,
+    )
+    assert summary.trap_absence_signal is True
+
+
+# ── Pricing / headline ──────────────────────────────────────────────────
+
+
+def test_pricing_table_has_expected_tiers():
+    from sieve._pricing import PRICING_TABLE, dollars_saved, price_for
+    for key in ("claude-opus", "claude-sonnet", "claude-haiku",
+                "gpt-4o", "gpt-4o-mini", "local"):
+        assert key in PRICING_TABLE
+    assert price_for("local") == 0.0
+    # Saving 1M tokens on sonnet ($3/M) should be $3.
+    assert dollars_saved(1_000_000, "claude-sonnet") == pytest.approx(3.0)
+    # Unknown tier returns 0 (safe default).
+    assert price_for("made-up-model") == 0.0
+
+
+def test_headline_mentions_reduction_and_dollar_savings():
+    from sieve.cli_benchmark import build_headline, CompareSummary
+    baseline = BenchmarkSummary(
+        total_inbound=24000, total_outbound=24000,
+        facts_learned=0, trap_absence_signal=None, turns=[],
+    )
+    sieve = BenchmarkSummary(
+        total_inbound=1000, total_outbound=8000,
+        facts_learned=11, trap_absence_signal=True, turns=[],
+        correct_recalls=6, gradable_recalls=6,
+    )
+    compare = CompareSummary(
+        baseline_tokens=24000,
+        sieve_outbound_tokens=8000,
+        sieve_inbound_tokens=1000,
+        baseline=baseline,
+        sieve=sieve,
+    )
+    headline = build_headline(summary=compare, pricing_tier="claude-sonnet")
+    assert "67%" in headline or "66%" in headline  # 16k / 24k
+    assert "16,000" in headline
+    assert "$" in headline  # dollar figure present
+    assert "6/6" in headline
+
+
+def test_headline_single_mode_mentions_recalls():
+    from sieve.cli_benchmark import build_headline
+    summary = BenchmarkSummary(
+        total_inbound=160, total_outbound=4000,
+        facts_learned=11, trap_absence_signal=True, turns=[1, 2, 3],  # count, not real
+        correct_recalls=5, gradable_recalls=6,
+    )
+    # Turns count is what matters for the render; we stub with fake list.
+    headline = build_headline(single=summary)
+    assert "5/6" in headline
+    assert "refused on the trap" in headline
+
+
+# ── Machine-readable output ─────────────────────────────────────────────
+
+
+def test_summary_to_dict_round_trips_compare_summary():
+    from sieve.cli_benchmark import summary_to_dict, CompareSummary
+    baseline = BenchmarkSummary(
+        total_inbound=24000, total_outbound=24000,
+        facts_learned=0, trap_absence_signal=None, turns=[],
+    )
+    sieve = BenchmarkSummary(
+        total_inbound=1000, total_outbound=8000,
+        facts_learned=11, trap_absence_signal=True, turns=[],
+        correct_recalls=6, gradable_recalls=6,
+    )
+    compare = CompareSummary(
+        baseline_tokens=24000,
+        sieve_outbound_tokens=8000,
+        sieve_inbound_tokens=1000,
+        baseline=baseline,
+        sieve=sieve,
+    )
+    d = summary_to_dict(compare, model="qwen3.5:9b", pricing_tier="claude-sonnet")
+    assert d["mode"] == "compare"
+    assert d["tokens_saved"] == 16000
+    assert d["reduction_pct"] == pytest.approx(66.67, rel=0.01)
+    assert d["dollars_saved_per_run"] > 0
+    assert d["dollars_saved_per_1k_runs"] > d["dollars_saved_per_run"]
+    # JSON-serialisable.
+    json.dumps(d)
+
+
+def test_render_markdown_produces_paste_able_report():
+    from sieve.cli_benchmark import render_markdown, CompareSummary
+    baseline = BenchmarkSummary(
+        total_inbound=24000, total_outbound=24000,
+        facts_learned=0, trap_absence_signal=None,
+        turns=[
+            TurnResult(
+                index=i, phase=BENCHMARK_MESSAGES[i-1]["phase"],
+                prompt=BENCHMARK_MESSAGES[i-1]["content"],
+                response="baseline response", inbound_tokens=1000, outbound_tokens=1000,
+                facts_before=0, facts_after=0, elapsed_s=1.0, absence_signal=None,
+            )
+            for i in range(1, 16)
+        ],
+    )
+    sieve = BenchmarkSummary(
+        total_inbound=1000, total_outbound=8000,
+        facts_learned=11, trap_absence_signal=True,
+        correct_recalls=6, gradable_recalls=6,
+        turns=[
+            TurnResult(
+                index=i, phase=BENCHMARK_MESSAGES[i-1]["phase"],
+                prompt=BENCHMARK_MESSAGES[i-1]["content"],
+                response="sieve response", inbound_tokens=300, outbound_tokens=500,
+                facts_before=0, facts_after=0, elapsed_s=2.0, absence_signal=None,
+            )
+            for i in range(1, 16)
+        ],
+    )
+    compare = CompareSummary(
+        baseline_tokens=24000, sieve_outbound_tokens=8000,
+        sieve_inbound_tokens=1000,
+        baseline=baseline, sieve=sieve,
+    )
+    md = render_markdown(
+        compare, model="qwen3.5:9b",
+        sieve_base_url="http://x", direct_base_url="http://y",
+        pricing_tier="claude-sonnet",
+    )
+    assert "## Sieve benchmark" in md
+    assert "| Tokens sent to LLM" in md
+    assert "**Savings" in md
+    assert "$" in md
+    assert "### Per-turn" in md

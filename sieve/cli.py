@@ -1448,7 +1448,31 @@ def demo(wait_for_write: bool, max_wait: float):
         "turn. Prints side-by-side tokens + latency. Takes ~2× as long."
     ),
 )
-def benchmark(config_path: str | None, model: str | None, compare: bool):
+@click.option(
+    "--pricing",
+    type=click.Choice(
+        ["local", "claude-opus", "claude-sonnet", "claude-haiku",
+         "gpt-4o", "gpt-4o-mini"],
+        case_sensitive=False,
+    ),
+    default="local",
+    help="Pricing tier for the cost panel (default: local / free).",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["rich", "json", "markdown"], case_sensitive=False),
+    default="rich",
+    help="Output format. 'rich' for terminal, 'json' for scripting, "
+    "'markdown' for paste-into-README.",
+)
+def benchmark(
+    config_path: str | None,
+    model: str | None,
+    compare: bool,
+    pricing: str,
+    output_format: str,
+):
     """Run a reproducible 15-message benchmark against the proxy.
 
     Default mode demonstrates memory + recall features on a bare-chat
@@ -1530,20 +1554,40 @@ def benchmark(config_path: str | None, model: str | None, compare: bool):
     from sieve.cli_benchmark import (
         run_benchmark, run_benchmark_compare,
         render_summary, render_compare_summary,
+        render_markdown, summary_to_dict,
+        looks_like_absence_signal, response_recalls,
+    )
+    from sieve._grader import build_recall_grader, build_trap_grader
+
+    # LLM-based graders always bypass Sieve and hit the LLM directly,
+    # so grading isn't biased by whatever context manipulation the
+    # proxy does. Falls back to the keyword heuristics on LLM failure.
+    direct_base = config.provider.base_url
+    recall_grader = build_recall_grader(
+        direct_base, model_name,
+        fallback=lambda _i, resp: response_recalls(_i, resp),
+    )
+    trap_grader = build_trap_grader(
+        direct_base, model_name,
+        fallback=looks_like_absence_signal,
     )
 
+    # Only announce the run in rich mode — json/markdown output must be
+    # machine-readable and free of progress chatter.
+    announce = (output_format == "rich")
+
     if compare:
-        direct_base = config.provider.base_url
-        console.print(
-            f"[bold]Sieve benchmark --compare[/] — two passes through "
-            f"agent-shaped payloads\n"
-            f"  baseline: [cyan]{direct_base}[/] (no Sieve)\n"
-            f"  sieve:    [cyan]{base}[/]\n"
-        )
-        console.print(
-            "[dim]This takes ~2× a normal benchmark run "
-            "(~2-5 minutes).[/]\n"
-        )
+        if announce:
+            console.print(
+                f"[bold]Sieve benchmark --compare[/] — two passes through "
+                f"agent-shaped payloads\n"
+                f"  baseline: [cyan]{direct_base}[/] (no Sieve)\n"
+                f"  sieve:    [cyan]{base}[/]\n"
+            )
+            console.print(
+                "[dim]This takes ~2× a normal benchmark run "
+                "(~2-5 minutes).[/]\n"
+            )
         try:
             _reset_store()
             compare_summary = run_benchmark_compare(
@@ -1552,32 +1596,55 @@ def benchmark(config_path: str | None, model: str | None, compare: bool):
                 model=model_name,
                 store_fact_count=_count,
                 reset_store=_reset_store,
+                grade_recall=recall_grader,
+                grade_trap=trap_grader,
             )
         except Exception as exc:
             console.print(f"[bold red]Benchmark failed:[/] {exc}")
             ms.close()
             sys.exit(1)
         ms.close()
+
+        if output_format == "json":
+            import json as _json
+            print(_json.dumps(
+                summary_to_dict(compare_summary, model=model_name, pricing_tier=pricing),
+                indent=2,
+            ))
+            return
+        if output_format == "markdown":
+            print(render_markdown(
+                compare_summary,
+                model=model_name,
+                sieve_base_url=base,
+                direct_base_url=direct_base,
+                pricing_tier=pricing,
+            ))
+            return
         render_compare_summary(
             compare_summary,
             model=model_name,
             sieve_base_url=base,
             direct_base_url=direct_base,
             console=console,
+            pricing_tier=pricing,
         )
         return
 
-    console.print(
-        f"[bold]Sieve benchmark[/] — 15 messages through the proxy at "
-        f"[cyan]{base}[/] (model: [cyan]{model_name}[/])\n"
-    )
-    console.print("[dim]This may take 1–3 minutes depending on your model.[/]\n")
+    if announce:
+        console.print(
+            f"[bold]Sieve benchmark[/] — 15 messages through the proxy at "
+            f"[cyan]{base}[/] (model: [cyan]{model_name}[/])\n"
+        )
+        console.print("[dim]This may take 1–3 minutes depending on your model.[/]\n")
 
     try:
         summary = run_benchmark(
             base_url=base,
             model=model_name,
             store_fact_count=_count,
+            grade_recall=recall_grader,
+            grade_trap=trap_grader,
         )
     except Exception as exc:
         console.print(f"[bold red]Benchmark failed:[/] {exc}")
@@ -1585,6 +1652,22 @@ def benchmark(config_path: str | None, model: str | None, compare: bool):
         sys.exit(1)
 
     ms.close()
+
+    if output_format == "json":
+        import json as _json
+        print(_json.dumps(
+            summary_to_dict(summary, model=model_name, pricing_tier=pricing),
+            indent=2,
+        ))
+        return
+    if output_format == "markdown":
+        print(render_markdown(
+            summary,
+            model=model_name,
+            sieve_base_url=base,
+            pricing_tier=pricing,
+        ))
+        return
     render_summary(summary, model=model_name, base_url=base, console=console)
 
 
