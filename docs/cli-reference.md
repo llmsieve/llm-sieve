@@ -1,77 +1,101 @@
 # CLI reference
 
-Every Sieve command, flag, and option. Grouped as it appears in `sieve --help`.
+Every Sieve command, flag, and option. For a guided walkthrough see [Getting started](getting-started.md); for config-key detail see [Configuration](configuration.md).
 
-For a guided walkthrough use [Getting started](getting-started.md); for conceptual detail on individual config keys see [Configuration](configuration.md).
+## Entry points
 
-## Top-level commands
+The `llm-sieve` distribution installs two executables:
 
-| Command                       | Purpose                                                 |
-| ----------------------------- | ------------------------------------------------------- |
-| [`sieve init`](#sieve-init)   | Create `~/.sieve/`, write default config, create store  |
-| [`sieve start`](#sieve-start) | Run the proxy in the foreground                         |
-| [`sieve stop`](#sieve-stop)   | Gracefully stop a running proxy                         |
-| [`sieve restart`](#sieve-restart) | Stop and start in one step                          |
-| [`sieve status`](#sieve-status) | Show proxy + store state                              |
-| [`sieve demo`](#sieve-demo)   | Scripted 6-message demo against a running proxy         |
-| [`sieve benchmark`](#sieve-benchmark) | Reproducible 15-message benchmark + summary    |
-| [`sieve uninstall`](#sieve-uninstall) | Remove Sieve (soft by default)                  |
+| Command | Purpose |
+|---|---|
+| [`sieve-install`](#sieve-install) | One-shot first-run setup. Provider → model → autostart → start → ready panel. |
+| [`sieve`](#top-level-commands) | Day-to-day management. Interactive menu when called without a subcommand. |
 
-Subcommand groups:
+`sieve-install` is the command you run once. Everything else is under `sieve`.
 
-| Group                           | Purpose                                   |
-| ------------------------------- | ----------------------------------------- |
-| [`sieve store`](#store)         | Inspect / export / wipe the memory store  |
-| [`sieve config`](#config)       | Show / edit / reset runtime configuration |
-| [`sieve key`](#key)             | Rotate / show / import / export the key   |
-| [`sieve backup`](#backup)       | Create / list / restore encrypted backups |
+## `sieve-install`
+
+One flow, no surprises. Walks through provider detection, model selection, embedding-model download, store initialisation, and optionally enables autostart. Ends on a green "Sieve is ready" panel with your config summary.
+
+```bash
+sieve-install
+sieve-install --no-input --provider http://127.0.0.1:11434 --model qwen3.5:9b
+sieve-install --provider https://api.openai.com/v1 --model gpt-4o-mini --api-key sk-...
+```
+
+**Flags:**
+
+| Flag | Purpose |
+|---|---|
+| `--no-input` | Skip all prompts; use defaults. For CI / scripted installs. |
+| `--provider URL` | Skip the "where's your LLM" step. |
+| `--model NAME` | Skip the model picker. |
+| `--api-key TOKEN` | Bearer token for cloud endpoints. Read from env (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) if `--provider` is a recognised cloud URL. |
+
+Safe to rerun any time. Probes the provider, rolls back cleanly on Ctrl-C, preserves the existing config as a backup if you reinstall.
 
 ---
 
-## `sieve init`
+## Top-level commands
 
-Initialise Sieve. Two modes:
+| Command | Purpose |
+|---|---|
+| [`sieve`](#sieve-wizard) / [`sieve wizard`](#sieve-wizard) | Interactive management menu |
+| [`sieve start`](#sieve-start) | Run the proxy in the foreground |
+| [`sieve stop`](#sieve-stop) | Gracefully stop a running proxy |
+| [`sieve restart`](#sieve-restart) | Stop and start in one step |
+| [`sieve status`](#sieve-status) | Proxy + store state |
+| [`sieve demo`](#sieve-demo) | Scripted 6-message demo (sandboxed) |
+| [`sieve benchmark`](#sieve-benchmark) | Reproducible baseline-vs-Sieve benchmark (sandboxed) |
+| [`sieve init`](#sieve-init) | Legacy: create `~/.sieve/`, write default config, init store |
+| [`sieve uninstall`](#sieve-uninstall) | Remove Sieve (soft by default) |
 
-### Default (lazy)
+**Subcommand groups:**
+
+| Group | Purpose |
+|---|---|
+| [`sieve store`](#store) | Inspect / export / wipe the memory store |
+| [`sieve config`](#config) | Show / edit / reset runtime configuration |
+| [`sieve key`](#key) | Rotate / show / import / export the encryption key |
+| [`sieve backup`](#backup) | Create / list / restore encrypted backups |
+
+---
+
+## `sieve wizard`
+
+Interactive management menu. Same as running `sieve` with no arguments.
 
 ```bash
-sieve init
+sieve                # shortest form
+sieve wizard         # explicit
 ```
 
-Zero prompts. Auto-detects Ollama on `localhost:11434`, generates a 256-bit encryption key, downloads the FastEmbed embedding model, writes `~/.sieve/sieve.yaml` with shipping defaults, and initialises the encrypted store.
+State-aware top menu:
 
-**Flags:**
-- `--provider URL` — override the auto-detected provider base URL.
-- `--force` — reinitialise even if `~/.sieve/` already exists.
+1. **Reinstall** — change provider / re-init; preserves the existing config as a backup.
+2. **Service** — start / stop / restart / enable autostart.
+3. **Store** — stats, facts, entities, episodes, recent activity.
+4. **Config** — adjust settings without editing YAML.
+5. **Benchmark** — measure Sieve's value; same as `sieve benchmark`.
+6. **Demo** — 6-turn scripted conversation.
+7. **Uninstall** — stop, disable autostart, remove `~/.sieve/`.
 
-### Wizard
-
-```bash
-sieve init --wizard
-```
-
-Six interactive steps:
-
-1. **Provider** — `1` Ollama (auto-detect) · `2` OpenAI · `3` Anthropic · `4` Custom URL.
-2. **Model** — for Ollama, pick from the list of local models. For cloud providers, free-text.
-3. **Port** — the port Sieve itself listens on. Defaults to `11435`. Rejects bound ports.
-4. **Encryption** — generate a random key (default) or supply a custom passphrase.
-5. **Store location** — defaults to `~/.sieve/memory.db`.
-6. **Confirmation** — summary of your choices; only applied if you confirm.
-
-Every step retries on failure (unreachable provider, port in use, etc.). The default lazy path is unchanged when `--wizard` is not passed.
+Options that don't apply right now (e.g. "stop" when the proxy isn't running) are marked unavailable rather than hidden. Press `b` at any submenu to go back, `q` to quit.
 
 ## `sieve start`
 
-Run the proxy in the foreground until interrupted.
+Run the proxy in the foreground until interrupted (Ctrl-C).
 
 **Flags:**
-- `-c, --config PATH` — load a specific `sieve.yaml` instead of the default lookup.
-- `--host` — override the listen host (default from config).
-- `-p, --port N` — override the listen port.
-- `-v, --verbose` — enable debug logging.
 
-Writes a PID file to `~/.sieve/sieve.pid` so `sieve status` and `sieve stop` can find the running process.
+| Flag | Purpose |
+|---|---|
+| `-c, --config PATH` | Load a specific `sieve.yaml` instead of the default lookup. |
+| `--host HOST` | Override the listen host. |
+| `-p, --port N` | Override the listen port. |
+| `-v, --verbose` | Enable debug logging. |
+
+Writes a PID file to `~/.sieve/sieve.pid` so `sieve status` and `sieve stop` can find the process.
 
 ## `sieve stop`
 
@@ -79,7 +103,7 @@ Sends `SIGTERM` to the PID in `~/.sieve/sieve.pid` and waits up to 5 seconds for
 
 ## `sieve restart`
 
-Runs `sieve stop` then replaces the current process with `sieve start` via `os.execvp`, so the new foreground proxy takes over the terminal. Flags you pass are forwarded:
+Runs `sieve stop` then replaces the current process with `sieve start` via `os.execvp`. Flags are forwarded:
 
 ```bash
 sieve restart --port 11500 --verbose
@@ -89,34 +113,79 @@ sieve restart --port 11500 --verbose
 
 ## `sieve status`
 
-Prints the running state, listen address, and high-level store statistics (fact count, entity count). If the proxy is not running, shows the "start Sieve with" hint.
-
-## `sieve benchmark`
-
-Reproducible proof that anyone can run on their own hardware. Drives a 15-message scripted conversation through the proxy and reports per-message inbound/outbound tokens, facts learned, response time, and whether the absence-signal layer fires on a trap query about something that was never introduced.
-
-Flags:
-
-- `-c, --config PATH` — alternate sieve.yaml
-- `--model NAME` — override the model (defaults to `provider.default_model`)
-
-Requires the proxy to be running: start it with [`sieve start`](#sieve-start) in another terminal first. The benchmark works against any OpenAI-compatible or Ollama-compatible model — the prompts do not depend on the model knowing specific facts.
-
-At the end of [`sieve init --wizard`](#sieve-init), Sieve offers to run the benchmark for you so you can verify the reduction on your machine before wiring anything up.
+Prints the running state, listen address, and high-level store statistics (fact count, entity count). If the proxy isn't running, shows the "start Sieve with…" hint.
 
 ## `sieve demo`
 
-Sends six scripted messages through a running proxy to demonstrate fact extraction and the absence-signal trap. Requires `sieve start` in another terminal.
+Sends six scripted messages through a sandboxed proxy (a scratch store that's torn down afterward). Demonstrates fact extraction and the absence-signal trap without touching your real store.
+
+**Flags:**
+
+| Flag | Purpose |
+|---|---|
+| `--wait-for-write` / `--no-wait-for-write` | Poll the store after each turn until the async writer has committed before sending the next. Default: on. |
+| `--max-wait SECONDS` | Max wait per turn if `--wait-for-write` is on. |
+| `--use-main-store` | Run against the live proxy and store. **Advanced** — adds demo facts to your real data. Requires `sieve start`. |
+
+## `sieve benchmark`
+
+Reproducible baseline-vs-Sieve comparison. Drives a 15-message scripted conversation twice — once direct to the LLM, once through Sieve — and prints the delta. Sandboxed by default. Always writes a shareable markdown report to `~/.sieve/benchmarks/`.
+
+Run without flags in an interactive terminal and you get a short preflight wizard (fixture size, model, grader, turns, runs, pricing). Any flag suppresses the wizard; `--no-input` always does.
+
+**Flags:**
+
+| Flag | Purpose |
+|---|---|
+| `-c, --config PATH` | Alternate `sieve.yaml`. |
+| `--fixture {small,medium,large,xlarge}` | Payload size. `small` = light agent, `medium` = Cursor-like (default), `large` = Claude Code mid-session, `xlarge` = autonomous run. |
+| `--model NAME` | Model to test. Defaults to `provider.default_model`. |
+| `--grader-model NAME` | Model used to grade recall + trap. Defaults to `--model` (self-grading, not recommended for shareable reports). |
+| `--turns N` | Turns per run. Default 15. |
+| `--runs N` | Number of full script runs (for mean ± stddev). Default 3. |
+| `--pricing TIER` | Pricing tier for the cost panel: `local`, `claude-opus`, `claude-sonnet`, `claude-haiku`, `gpt-4o`, `gpt-4o-mini`. Default `local` (no $ shown). |
+| `--format {rich,json,markdown}` | Terminal output format. A markdown report is always written regardless. |
+| `--no-input` | Skip the wizard; use flag values and defaults. |
+| `--use-main-store` | Run against the live proxy and store. **Advanced.** |
+
+The prompts don't depend on the model knowing specific facts, so comparisons are apples-to-apples across models.
+
+## `sieve init`
+
+Legacy setup command. `sieve-install` is the preferred entry point for new installs — it wraps the same work with a nicer flow and rollback on failure. `sieve init` is still supported for users who learned it before `sieve-install` existed, and for CI scripts that already call it.
+
+```bash
+sieve init                       # zero-prompt, uses defaults
+sieve init --wizard              # six-step interactive setup (older UX)
+sieve init --force               # overwrite an existing ~/.sieve/
+sieve init --provider URL        # override the auto-detected provider
+```
+
+**Flags:**
+
+| Flag | Purpose |
+|---|---|
+| `--provider URL` | LLM provider base URL. |
+| `--wizard` | Six-step interactive guided setup. |
+| `--force` | Reinitialise even if `~/.sieve/` already exists. |
 
 ## `sieve uninstall`
 
-Remove Sieve. Default behaviour is **soft** — leaves `~/.sieve/` (store, config, key) in place so your data survives.
+Remove Sieve. Default is **soft** — leaves `~/.sieve/` in place so your data survives.
+
+```bash
+sieve uninstall            # soft: preserves ~/.sieve/
+sieve uninstall --hard     # requires typing DELETE; removes ~/.sieve/
+```
 
 **Flags:**
-- `--soft` *(default when no flag is passed)* — preserves data; prints the `pip uninstall llm-sieve` instruction.
-- `--hard` — requires typing `DELETE` to confirm; recursively removes `~/.sieve/`.
 
-`--soft` and `--hard` are mutually exclusive.
+| Flag | Purpose |
+|---|---|
+| `--soft` *(default)* | Preserves data; prints the `pipx uninstall llm-sieve` instruction. |
+| `--hard` | Requires typing `DELETE`; recursively removes `~/.sieve/`. |
+
+`--soft` and `--hard` are mutually exclusive. Sieve can't remove the Python package it's currently executing from — that's what the follow-up `pipx uninstall llm-sieve` is for.
 
 ---
 
@@ -136,7 +205,7 @@ Compact summary: path, file size, row counts.
 
 ### `sieve store stats`
 
-Detailed statistics — per-table row counts (facts, entities, relationships, episodes, preferences, sessions, known_unknowns, vec_facts, audit_log, fingerprints), database file size, and average facts per entity.
+Detailed statistics — per-table row counts (facts, entities, relationships, episodes, preferences, sessions, known_unknowns, vec_facts, audit_log, fingerprints), database file size, average facts per entity.
 
 ### `sieve store facts [--limit N] [--search QUERY]`
 
@@ -163,7 +232,7 @@ Decrypted dump for backup or migration.
 
 ### `sieve store wipe`
 
-Delete all data rows from the store while preserving the schema and keyfile. Requires typing the literal string `WIPE` to confirm. Use this when you want to start over without re-initialising.
+Delete all data rows from the store while preserving the schema and keyfile. Requires typing `WIPE` to confirm. Use when you want to start over without re-initialising.
 
 ### `sieve store migrate --to PATH`
 
@@ -179,7 +248,7 @@ sieve config <subcommand>
 
 ### `sieve config show`
 
-Prints the effective configuration as a table. Non-default values are highlighted so you can see what you've changed relative to the ship defaults.
+Prints the effective configuration as a table. Non-default values are highlighted so you can see what you've changed relative to shipped defaults.
 
 ### `sieve config set <key> <value>`
 
@@ -198,11 +267,11 @@ Restart Sieve for the change to take effect.
 
 ### `sieve config reset`
 
-Reset the configuration to ship defaults. Requires confirmation. Preserves two fields the user almost never wants reset: `provider.base_url` and `store.path`.
+Reset configuration to shipped defaults. Requires confirmation. Preserves two fields the user almost never wants reset: `provider.base_url` and `store.path`.
 
 ### `sieve config edit`
 
-Open `~/.sieve/sieve.yaml` in `$EDITOR`. After save, the file is re-parsed as `RecallConfig`; invalid YAML triggers an automatic rollback to the prior content.
+Open `~/.sieve/sieve.yaml` in `$EDITOR`. After save, the file is re-parsed; invalid YAML triggers an automatic rollback to the prior content.
 
 ---
 
@@ -240,7 +309,7 @@ sieve backup <subcommand>
 
 ### `sieve backup create [--output PATH]`
 
-Create an encrypted backup of the store. Timestamped filename (`recall_backup_YYYY-MM-DDTHHMMSS.db.enc`) with SHA-256 checksum sidecar. By default writes to `~/.sieve/backups/`.
+Create an encrypted backup of the store. Timestamped filename (`recall_backup_YYYY-MM-DDTHHMMSS.db.enc`) with SHA-256 checksum sidecar. Default destination: `~/.sieve/backups/`.
 
 ### `sieve backup list`
 
@@ -248,14 +317,14 @@ Table of available backups: timestamp, size, checksum status, full path.
 
 ### `sieve backup restore <backup-id>`
 
-Restore from a named backup. Asks for confirmation before overwriting the current store. The current store is copied to a `pre_restore_*.db.bak` file first in case you need to undo.
+Restore from a named backup. Asks for confirmation before overwriting the current store. The current store is copied to `pre_restore_*.db.bak` first in case you need to undo.
 
 ---
 
 ## Exit codes
 
-| Code | Meaning                                                                 |
-| ---- | ----------------------------------------------------------------------- |
-| 0    | Success                                                                 |
-| 1    | Runtime error — store not found, wrong confirmation, provider unreachable |
-| 2    | Invalid input — unknown config path, bad enum value, conflicting flags  |
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Runtime error — store not found, wrong confirmation, provider unreachable |
+| 2 | Invalid input — unknown config path, bad enum value, conflicting flags |

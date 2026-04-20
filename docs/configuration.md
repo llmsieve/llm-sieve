@@ -1,6 +1,6 @@
 # Configuration
 
-Sieve reads its configuration from a single YAML file. After `sieve init`, that file lives at `~/.sieve/sieve.yaml`. You can override the path with `sieve start --config <path>` or by setting `SIEVE_CONFIG`.
+Sieve reads its configuration from a single YAML file. After `sieve-install`, that file lives at `~/.sieve/sieve.yaml`. You can override the path with `sieve start --config <path>` or by setting `SIEVE_CONFIG`.
 
 The shipping example — with commentary on every option — is [`sieve.example.yaml`](https://github.com/llmsieve/llm-sieve/blob/main/sieve.example.yaml). This page documents the same options with more context.
 
@@ -31,7 +31,7 @@ sieve config reset                                   # ship defaults; preserves 
 
 ## Reference
 
-Every top-level section below maps to a block in `sieve.yaml`. Defaults shown are what `sieve init` writes.
+Every top-level section below maps to a block in `sieve.yaml`. Defaults shown are what `sieve-install` writes.
 
 ### `listen`
 
@@ -279,7 +279,7 @@ The most consequential flags:
 
 ### Local Ollama (default)
 
-The `sieve init` defaults cover this case. No edits required.
+The `sieve-install` defaults cover this case. No edits required.
 
 ### Any OpenAI-compatible endpoint
 

@@ -69,26 +69,37 @@ Full methodology and detailed analysis will be published in a forthcoming paper.
 ## Quick start
 
 ```bash
-pip install llm-sieve
-sieve init        # zero-prompt setup; add --wizard to be asked about each option
-sieve start       # proxy listens on http://127.0.0.1:11435
+pipx install llm-sieve
+sieve-install
 ```
 
-Point your agent at `http://127.0.0.1:11435` instead of your usual LLM endpoint. That is the whole integration.
+Two commands. The first puts `sieve` and `sieve-install` on your `PATH`. The second walks you through setup — finds your LLM, downloads the ~50 MB embedding model, writes an encrypted store under `~/.sieve/`, offers to start the proxy, and leaves you on a green "ready" panel.
 
-### One command
+When it's done, point your agent at `http://127.0.0.1:11435` instead of your usual LLM endpoint. That is the whole integration.
 
-<p align="center"><img src="branding/sieve-quick-install.gif" alt="Quick install demo" width="720"></p>
+> Don't have `pipx`? `python3 -m pip install --user pipx && pipx ensurepath` installs it and puts it on your `PATH`. Or use plain `pip install llm-sieve` inside a virtualenv. See [Installation](https://llmsieve.dev/installation/) for every supported path.
 
-### Guided setup
+<p align="center"><img src="branding/sieve-quick-install.gif" alt="One-command install demo" width="720"></p>
 
-If you prefer to be asked about each option — provider URL, model, port, encryption, store location — use the wizard. At the end it offers to run the benchmark below so you can verify token reduction on your own machine before you wire anything up.
+### Managing Sieve — the interactive menu
+
+Running `sieve wizard` (or just `sieve` on its own) drops you into a menu for day-two operations: start/stop the proxy, inspect the store, reconfigure, run the benchmark, uninstall. Everything is state-aware — options that don't apply right now (e.g. "stop" when the proxy isn't running) are marked as such.
 
 ```bash
-sieve init --wizard
+sieve wizard
 ```
 
-<p align="center"><img src="branding/sieve-wizard-install.gif" alt="Wizard install demo" width="720"></p>
+<p align="center"><img src="branding/sieve-wizard.gif" alt="Interactive management menu" width="720"></p>
+
+### Prove the numbers on your own machine
+
+```bash
+sieve benchmark
+```
+
+Runs a 15-turn scripted conversation against your configured model twice — once direct, once through Sieve — and prints the delta. Works against any Ollama or OpenAI-compatible endpoint. The prompts don't depend on the model knowing specific facts.
+
+<p align="center"><img src="branding/sieve-benchmark.gif" alt="Benchmark — 90% fewer tokens on a real run" width="720"></p>
 
 Full walkthrough: [Getting started](https://llmsieve.dev/getting-started/).
 
@@ -120,36 +131,19 @@ Several excellent projects address different facets of the context-and-memory pr
 
 Sieve is complementary. It works alongside any of these approaches — reducing what gets sent to the model regardless of how the context was assembled. Better memory + leaner delivery = better results.
 
-## Demo mode
+## Try it without wiring anything up
 
-With the proxy running, open another terminal:
+Two scripted flows ship with the CLI. Both run against a **sandboxed store** — your real `~/.sieve/memory.db` is never touched.
 
-```bash
-sieve demo
-```
+**`sieve demo`** — a six-message scripted conversation that introduces an identity, seeds a couple of facts, asks Sieve to recall them, and ends with a question about a person who was never mentioned. You see recall hits on the seeded facts and a refusal on the trap question.
 
-It runs a six-message scripted conversation — a new identity introduces themselves, shares a couple of facts, asks Sieve to recall them, and then asks about a person who was never mentioned. You will see recall hits on the seeded facts, and a refusal on the absence-trap question.
+**`sieve benchmark`** — the same idea at 15 turns with per-message accounting. Prints a table of inbound vs outbound tokens, facts learned per message, time per turn, and the verdict on the absence-trap. Works against any model `sieve.yaml` points at; the prompts don't depend on the model knowing specific facts, so the comparison is always apples-to-apples.
 
-## Benchmark
+The benchmark is what backs the hero numbers at the top — run it and see what you get on your own hardware.
 
-Don't trust the numbers at the top — run the benchmark yourself:
+## Scripting the CLI
 
-```bash
-sieve benchmark
-```
-
-It runs a 15-message scripted conversation (introduce facts → ask retrieval questions → deeper follow-ups → temporal updates → a trap query about something that was never mentioned) and prints a per-message table plus overall totals. You get:
-
-- **Per-turn inbound vs outbound tokens** (the proxy reports both directly)
-- **Facts learned per message** (polled from the store before and after each turn)
-- **Time per turn**
-- **Whether the absence-signal layer fired on the trap** (fuzzy but explicit — both the fact-count delta and the response text are shown)
-
-The benchmark works against any OpenAI-compatible or Ollama-compatible model pointed at by `sieve.yaml` — the prompts do not depend on the model knowing specific facts.
-
-## Managing Sieve
-
-The CLI covers everyday operations without editing YAML:
+Everything the wizard does is reachable from individual CLI commands, so you can script operations instead of driving the menu:
 
 ```bash
 sieve status                           # running state + store counts
@@ -166,7 +160,7 @@ Full list with every flag: [CLI reference](https://llmsieve.dev/cli-reference/).
 
 ## Configuration
 
-After `sieve init`, your config lives at `~/.sieve/sieve.yaml`. The shipping example — with commentary on every option — is [`sieve.example.yaml`](sieve.example.yaml).
+After `sieve-install`, your config lives at `~/.sieve/sieve.yaml`. The shipping example — with commentary on every option — is [`sieve.example.yaml`](sieve.example.yaml).
 
 Key settings:
 
