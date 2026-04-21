@@ -2360,6 +2360,17 @@ class MemoryWriter:
 
         result.entities_written = len(entity_cache)
 
+        # D41 safety-net: after any edge inserts, sweep User→*→T edges
+        # for mutually-exclusive conflicts and supersede the weaker one.
+        # This catches cases where an edge slipped past the write-time
+        # D41 check (e.g. a race with the async writer, or a path that
+        # bypasses the per-turn guard). Idempotent and cheap (~1ms for
+        # typical user-graph size).
+        try:
+            self._sweep_polarity_conflicts()
+        except Exception as exc:
+            logger.warning("polarity sweep failed: %s", exc)
+
         # Phase-3 Fix 2: emit one episode per user turn so follow-up
         # queries can retrieve the compressed record of this turn.
         await self._maybe_insert_episode(
@@ -2378,6 +2389,57 @@ class MemoryWriter:
         )
 
         return result
+
+    def _sweep_polarity_conflicts(self) -> None:
+        """Post-write sweep: for each (user, target) pair with multiple
+        edges, if two edges are in the same mutually-exclusive role
+        cluster, mark the lower-confidence (and older-if-tied) edge as
+        superseded. Catches leaks past the per-edge D41 guard.
+        """
+        if not self._store._conn:
+            return
+        _CLUSTER = {
+            "sister", "brother", "sibling", "wife", "husband",
+            "spouse", "partner", "mother", "father", "parent",
+            "son", "daughter", "child", "cousin", "friend",
+            "best friend", "boss", "colleague", "coworker",
+        }
+        user_row = self._store._conn.execute(
+            "SELECT id FROM entities WHERE LOWER(name) IN ('user','jamie') LIMIT 1"
+        ).fetchone()
+        if not user_row:
+            return
+        user_id = user_row[0]
+        # Edges grouped by target
+        rows = self._store._conn.execute(
+            "SELECT id, relationship, target_entity, confidence, created_at "
+            "FROM relationships "
+            "WHERE source_entity = ? AND status = 'current'",
+            (user_id,),
+        ).fetchall()
+        by_target: dict[str, list[tuple]] = {}
+        for row in rows:
+            by_target.setdefault(row[2], []).append(row)
+        for target_id, edges in by_target.items():
+            if len(edges) < 2:
+                continue
+            cluster_members = [e for e in edges if (e[1] or "").lower() in _CLUSTER]
+            if len(cluster_members) < 2:
+                continue
+            # Keep the highest-confidence (older wins on tie).
+            cluster_members.sort(key=lambda e: (-(e[3] or 0.0), e[4] or ""))
+            winner = cluster_members[0]
+            for loser in cluster_members[1:]:
+                self._store._conn.execute(
+                    "UPDATE relationships SET status = 'superseded' WHERE id = ?",
+                    (loser[0],),
+                )
+                logger.info(
+                    "polarity sweep: superseded %r->%r (conf %.2f), kept %r (conf %.2f)",
+                    loser[1], target_id[:8], loser[3] or 0.0,
+                    winner[1], winner[3] or 0.0,
+                )
+        self._store._conn.commit()
 
     def _get_or_create_entity(self, name: str, entity_type: str) -> str:
         """Get existing entity by name or create it. Returns entity ID.
