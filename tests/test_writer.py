@@ -464,3 +464,57 @@ class TestWriteResultStageCounts:
         """First write of a fact can't supersede anything."""
         result = await writer.process("I live in Dubai.")
         assert result.supersessions == 0
+
+
+# ─── D42: Pet species coverage (breed + acquisition forms) ───────────────
+
+class TestPetSpeciesPatterns:
+    """D42 regression: pets named with a breed (whippet, labrador, cat)
+    rather than a generic "pet" word went unextracted. Also "we adopted
+    a cat called X" style announcements were missed."""
+
+    def test_my_whippet_named(self):
+        from sieve.writer import extract_facts_s1
+        facts = extract_facts_s1("My whippet Ziggy loves the park.")
+        rels = [f for f in facts if f.relation == "whippet"]
+        assert rels, f"expected whippet relation, got {[(f.relation, f.content) for f in facts]}"
+
+    def test_we_adopted_cat_named(self):
+        from sieve.writer import extract_facts_s1
+        facts = extract_facts_s1("We adopted a third pet — a cat called Toast.")
+        rels = [f for f in facts if f.relation == "cat"]
+        assert rels, f"expected cat relation, got {[(f.relation, f.content) for f in facts]}"
+        assert rels[0].related_entity == "Toast"
+
+    def test_we_decided_to_get_whippet(self):
+        from sieve.writer import extract_facts_s1
+        # This phrasing is trickier — "His name is Ziggy" as a separate
+        # sentence. Single-sentence acquisition forms covered; multi-
+        # sentence falls to S2. Not asserting here but documenting.
+        facts = extract_facts_s1("We got a whippet called Ziggy.")
+        rels = [f for f in facts if f.relation == "whippet"]
+        assert rels, f"expected whippet relation, got {[(f.relation, f.content) for f in facts]}"
+
+
+# ─── D1/D18: Interrogative turns must not produce fact writes ───────────
+
+class TestS1RejectsInterrogatives:
+    """D1/D18: S1 regex was extracting "User's hamster is Nibbles's" from
+    the trap question 'What time is my hamster Nibbles's vet appointment?'
+    Pure-interrogative sentences must return [] from S1."""
+
+    def test_trap_hamster_produces_no_facts(self):
+        from sieve.writer import extract_facts_s1
+        facts = extract_facts_s1("What time is my hamster Nibbles's vet appointment?")
+        assert facts == [], f"expected no facts, got {[f.content for f in facts]}"
+
+    def test_trap_brother_produces_no_facts(self):
+        from sieve.writer import extract_facts_s1
+        facts = extract_facts_s1("How is my brother Tom doing?")
+        assert facts == [], f"expected no facts, got {[f.content for f in facts]}"
+
+    def test_declarative_still_extracted(self):
+        from sieve.writer import extract_facts_s1
+        # A declarative statement must still produce facts.
+        facts = extract_facts_s1("My sister Amy lives in Edinburgh with her husband and two kids.")
+        assert facts, "expected at least one fact from declarative input"

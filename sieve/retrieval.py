@@ -265,10 +265,18 @@ class ContextRetriever:
         entity_ids_by_fact: dict[str, set[str]] = {}
         fact_ids_seen: set[str] = set()
         primary_candidates: list[dict] = []
+        # D39: confidence floor. Trap-ingested facts scored 0.50-0.75
+        # in the first run; apply a retrieval-time floor of 0.40 to drop
+        # the lowest-confidence stragglers even if a write sneaks past
+        # the upstream D1 gate. Keep provisional facts (0.40-0.70) because
+        # they genuinely are useful — we only reject clear garbage.
+        _CONFIDENCE_FLOOR = 0.40
         for f in vector_facts:
             if self._temporal_versioning:
                 if f.get("status") not in (None, "current", "provisional"):
                     continue
+            if (f.get("confidence") or 1.0) < _CONFIDENCE_FLOOR:
+                continue
             primary_candidates.append(f)
             fact_ids_seen.add(f["id"])
             f_ents = set(self._get_entity_ids_for_fact(f["id"]))

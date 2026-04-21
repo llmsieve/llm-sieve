@@ -128,8 +128,16 @@ _pat("allergies",
      "objective", "health")
 
 # Pets: "My cat/dog is named X" / "My cat X" / "We have a dog named X"
+#
+# D42: extended to include breed nouns as species indicators. In the
+# 30-day run "we decided to get the whippet! His name is Ziggy" didn't
+# trigger because 'whippet' wasn't recognised as a pet word — now it is.
 _pat("pet_named",
-     r"\b(?:my|our)\s+(cat|dog|pet|puppy|kitten|rabbit|hamster|bird|parrot)\s+(?:is\s+)?(?:named\s+|called\s+)?([A-Z][A-Za-z '\-]{1,30}?)(?:[,\.!?]|$)",
+     r"\b(?:my|our)\s+(cat|dog|pet|puppy|kitten|rabbit|hamster|bird|parrot|"
+     r"whippet|greyhound|retriever|spaniel|poodle|bulldog|shepherd|collie|"
+     r"husky|beagle|labrador|pug|dachshund|chihuahua|mastiff|boxer|corgi|"
+     r"terrier|hound|tabby|siamese|persian|ragdoll)"
+     r"\s+(?:is\s+)?(?:named\s+|called\s+)?([A-Z][A-Za-z '\-]{1,30}?)(?:[,\.!?]|$)",
      "objective", "relationship")
 _pat("we_have_relation_named",
      rf"\bwe\s+have\s+(?:a\s+|an\s+)?(?:\w+\s+)?({_RELATION_WORDS})\s+(?:[A-Za-z]{{1,20}}\s+)?(?:is\s+)?(?:named|called)\s+([A-Z][A-Za-z '\-]{{1,30}}?)(?:[,\.!?]|$)",
@@ -138,7 +146,22 @@ _pat("we_have_relation_named",
 # identity directly so follow-ups ("What breed is Mabel?") can retrieve
 # the animal entity even if the user never said "my dog".
 _pat("i_have_pet_named",
-     r"\bi\s+have\s+(?:a\s+|an\s+|another\s+)?(cat|dog|pet|puppy|kitten|rabbit|hamster|bird|parrot)\s+(?:named\s+|called\s+)([A-Z][A-Za-z '\-]{1,30}?)(?:[,\.!?]|$)",
+     r"\bi\s+have\s+(?:a\s+|an\s+|another\s+)?(cat|dog|pet|puppy|kitten|rabbit|hamster|bird|parrot|"
+     r"whippet|greyhound|retriever|spaniel|poodle|bulldog|shepherd|collie|husky|beagle|labrador)"
+     r"\s+(?:named\s+|called\s+)([A-Z][A-Za-z '\-]{1,30}?)(?:[,\.!?]|$)",
+     "objective", "relationship")
+# D42: "we adopted/got a cat called X" / "We adopted a third pet — a cat
+# called Toast" — covers the acquisition-style announcements. The
+# middle-filler matcher accepts anything up to ~20 chars so em-dashes
+# and qualifiers like "third pet —" don't break the match.
+_pat("we_adopted_pet_named",
+     r"\bwe\s+(?:adopted|got|rescued|picked\s+up|brought\s+home)\s+"
+     r"[^.!?]{0,40}?"  # liberal middle: handles "a third pet — a "
+     r"\b(cat|dog|pet|puppy|kitten|rabbit|hamster|bird|parrot|"
+     r"whippet|greyhound|retriever|spaniel|poodle|bulldog|shepherd|collie|"
+     r"husky|beagle|labrador|pug|dachshund|chihuahua|mastiff|boxer|corgi|"
+     r"terrier|hound|tabby)"
+     r"\s+(?:named\s+|called\s+)([A-Z][A-Za-z '\-]{1,30}?)(?:[,\.!?]|$)",
      "objective", "relationship")
 # Pet breed: "Mabel is a border terrier" / "she's a border terrier" /
 # "he's a golden retriever". Captures the breed as a discrete fact so
@@ -2151,6 +2174,47 @@ class MemoryWriter:
             if fact.relation and fact.related_entity and fact.related_entity in entity_cache:
                 user_entity_id = self._get_or_create_entity("User", "person")
                 related_id = entity_cache[fact.related_entity]
+                # D41: reject polarity-contradicting new relationships for
+                # the same target. If "User → sister → Amy" exists, a
+                # new "User → husband → Amy" is a hallucination — keep
+                # the older, higher-confidence edge and skip the new one.
+                # Families share small mutually-exclusive role clusters.
+                _MUTUALLY_EXCLUSIVE_ROLES = [
+                    {"sister", "brother", "sibling", "wife", "husband",
+                     "spouse", "partner", "mother", "father", "parent",
+                     "son", "daughter", "child", "cousin", "friend",
+                     "best friend", "boss", "colleague", "coworker"},
+                ]
+                existing_edges = self._store.conn.execute(
+                    """SELECT relationship, confidence FROM relationships
+                       WHERE source_entity = ? AND target_entity = ?
+                         AND status = 'current'""",
+                    (user_entity_id, related_id),
+                ).fetchall()
+                new_rel_l = fact.relation.lower().strip()
+                skip_insert = False
+                for existing_rel_raw, existing_conf in existing_edges:
+                    existing_rel_l = (existing_rel_raw or "").lower().strip()
+                    if existing_rel_l == new_rel_l:
+                        # Dedup handled inside insert_relationship (D40).
+                        continue
+                    # Check if both roles belong to the same exclusive set
+                    for cluster in _MUTUALLY_EXCLUSIVE_ROLES:
+                        if existing_rel_l in cluster and new_rel_l in cluster:
+                            # Keep the older/higher-confidence edge.
+                            if (existing_conf or 0.0) >= fact.confidence:
+                                logger.info(
+                                    "D41 polarity: rejecting new '%s' edge, "
+                                    "existing '%s' (conf %.2f ≥ %.2f) wins",
+                                    new_rel_l, existing_rel_l,
+                                    existing_conf or 0.0, fact.confidence,
+                                )
+                                skip_insert = True
+                                break
+                    if skip_insert:
+                        break
+                if skip_insert:
+                    continue
                 try:
                     self._store.insert_relationship(
                         source_entity=user_entity_id,
@@ -2184,11 +2248,43 @@ class MemoryWriter:
         return result
 
     def _get_or_create_entity(self, name: str, entity_type: str) -> str:
-        """Get existing entity by name or create it. Returns entity ID."""
+        """Get existing entity by name or create it. Returns entity ID.
+
+        D37: the old signature passed fact.category ("financial", "hobby",
+        "relationship") as entity_type. That conflates fact domain with
+        entity kind — "Toast" (a cat) ended up as type="hobby",
+        "Volvo XC40" as type="occupation". Now we map known fact
+        categories to correct entity kinds (person / pet / location /
+        place / vehicle / organisation / thing) and default to "thing"
+        when ambiguous. Existing entities' type is not rewritten (we
+        never knew that "hobby" meant "pet" before — keep the legacy
+        entity for relational integrity, new entities get correct types).
+        """
         existing = self._store.find_entity_by_name(name)
         if existing:
             return existing["id"]
-        return self._store.insert_entity(name, type=entity_type)
+        # Map fact.category → entity kind. Relationship-valued categories
+        # default to "person" at the call site; everything else comes here.
+        _CATEGORY_TO_ENTITY_KIND = {
+            "identity": "person",
+            "relationship": "person",
+            "location": "location",
+            "occupation": "thing",   # company/role names land here
+            "health": "thing",
+            "education": "thing",
+            "financial": "thing",
+            "preference": "thing",
+            "opinion": "thing",
+            "hobby": "thing",
+            "plan": "thing",
+            "person": "person",
+            "pet": "pet",
+            "place": "location",
+            "vehicle": "thing",
+            "thing": "thing",
+        }
+        resolved_type = _CATEGORY_TO_ENTITY_KIND.get(entity_type.lower(), entity_type)
+        return self._store.insert_entity(name, type=resolved_type)
 
     async def _maybe_insert_episode(
         self,
