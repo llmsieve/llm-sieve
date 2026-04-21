@@ -879,6 +879,69 @@ def _validate_s2_fact(
     return (True, None)
 
 
+# D2: relative-date resolver. Replaces "next week", "next month",
+# "last weekend", etc. in a fact content string with a resolved
+# date range, anchored to the clock passed in via ``now``. Preserves
+# the original phrase in parentheses so the fact is still traceable.
+_RELATIVE_DATE_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bnext weekend\b", re.IGNORECASE), "next_weekend"),
+    (re.compile(r"\bthis weekend\b", re.IGNORECASE), "this_weekend"),
+    (re.compile(r"\blast weekend\b", re.IGNORECASE), "last_weekend"),
+    (re.compile(r"\bnext week\b", re.IGNORECASE), "next_week"),
+    (re.compile(r"\blast week\b", re.IGNORECASE), "last_week"),
+    (re.compile(r"\bnext month\b", re.IGNORECASE), "next_month"),
+    (re.compile(r"\blast month\b", re.IGNORECASE), "last_month"),
+    (re.compile(r"\byesterday\b", re.IGNORECASE), "yesterday"),
+    (re.compile(r"\btomorrow\b", re.IGNORECASE), "tomorrow"),
+    (re.compile(r"\btoday\b", re.IGNORECASE), "today"),
+]
+
+
+def _resolve_relative_dates(content: str, now) -> str:
+    """Replace relative-date tokens in fact content with resolved dates.
+
+    ``now`` is a timezone-aware datetime. For each matched relative
+    expression, replace with "{ISO_DATE} (originally 'phrase')" so the
+    resolved absolute date becomes retrieval-indexable while the
+    original phrasing is preserved for trace.
+    """
+    if not content or now is None:
+        return content
+    from datetime import timedelta
+
+    def _weekend_of(ref):
+        # Saturday = weekday 5, Sunday = 6. Return the next Saturday.
+        days_ahead = (5 - ref.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        return ref + timedelta(days=days_ahead)
+
+    replacements = {
+        "next_weekend": _weekend_of(now).date().isoformat(),
+        "this_weekend": (_weekend_of(now) - timedelta(days=7)).date().isoformat()
+            if now.weekday() < 5 else now.date().isoformat(),
+        "last_weekend": (_weekend_of(now) - timedelta(days=7)).date().isoformat(),
+        "next_week": (now + timedelta(days=7)).date().isoformat(),
+        "last_week": (now - timedelta(days=7)).date().isoformat(),
+        "next_month": (now.replace(day=1) + timedelta(days=32)).replace(day=1).date().isoformat(),
+        "last_month": (now.replace(day=1) - timedelta(days=1)).replace(day=1).date().isoformat(),
+        "yesterday": (now - timedelta(days=1)).date().isoformat(),
+        "tomorrow": (now + timedelta(days=1)).date().isoformat(),
+        "today": now.date().isoformat(),
+    }
+
+    out = content
+    for rx, key in _RELATIVE_DATE_PATTERNS:
+        m = rx.search(out)
+        if m is None:
+            continue
+        resolved = replacements[key]
+        original_phrase = m.group(0)
+        replacement = f"{resolved} (originally '{original_phrase}')"
+        out = rx.sub(replacement, out, count=1)
+    return out
+
+
 def _s2_gate(text: str, s1_facts: list[ExtractedFact]) -> bool:
     """Stage 2 gate: should we invoke the LLM for deeper extraction?
 
@@ -1875,6 +1938,22 @@ class MemoryWriter:
             if not drop:
                 filtered.append(cand)
         all_candidates = filtered
+
+        # D2: resolve relative-date expressions in fact content against
+        # the injected clock. "My sister is visiting next weekend" stored
+        # verbatim becomes stale the moment the clock advances; rewriting
+        # to "on 2026-01-19 (originally stated 'next weekend' on 2026-01-15)"
+        # preserves both the resolved date AND the original phrasing.
+        try:
+            from sieve.clock import get_clock
+            now = get_clock().now()
+        except Exception:
+            now = None
+        if now is not None:
+            for cand in all_candidates:
+                resolved = _resolve_relative_dates(cand.content, now)
+                if resolved != cand.content:
+                    cand.content = resolved
 
         # Post-S2 ghost-fact validator — reject inverted identity and
         # duplicate-name extractions from S2 output. S1 regex facts are

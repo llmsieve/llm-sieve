@@ -518,3 +518,41 @@ class TestS1RejectsInterrogatives:
         # A declarative statement must still produce facts.
         facts = extract_facts_s1("My sister Amy lives in Edinburgh with her husband and two kids.")
         assert facts, "expected at least one fact from declarative input"
+
+
+# ─── D2: Relative-date resolution at S2/S1 time ──────────────────────────
+
+class TestRelativeDateResolution:
+    """D2: 'next weekend' stored verbatim was still being reported as
+    'next weekend' 10 days later. Resolution at write time anchors
+    dates to the clock injected at the time of the fact write."""
+
+    def test_resolves_next_weekend(self):
+        from datetime import datetime, timezone
+        from sieve.writer import _resolve_relative_dates
+        # Thursday 15 Jan 2026 → next weekend is Saturday 17 Jan.
+        out = _resolve_relative_dates(
+            "Amy is visiting next weekend.",
+            datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        assert "2026-01-17" in out
+        assert "originally 'next weekend'" in out
+
+    def test_resolves_next_month(self):
+        from datetime import datetime, timezone
+        from sieve.writer import _resolve_relative_dates
+        out = _resolve_relative_dates(
+            "Pepper needs her vaccination next month.",
+            datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        assert "2026-02-01" in out
+
+    def test_ignores_absolute_dates(self):
+        from datetime import datetime, timezone
+        from sieve.writer import _resolve_relative_dates
+        # Should not mangle absolute dates.
+        out = _resolve_relative_dates(
+            "Wedding set for June 2027.",
+            datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        assert out == "Wedding set for June 2027."
