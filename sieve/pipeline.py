@@ -21,15 +21,47 @@ from sieve.progression import PhaseDecision
 
 logger = logging.getLogger("recall.pipeline")
 
-# The lean system prompt that replaces the agent's bloated one
+# The lean system prompt that replaces the agent's bloated one.
+#
+# A1/A2/A4/A7/D6 rewrite (2026-04-21): the earlier prompt emphasised
+# "direct and concise" + "under 200 words" and produced pathological
+# terseness — seed acknowledgements became "Noted.", lookups returned
+# bare values with no context ("£240,000" answering "how much do I owe
+# on my mortgage"). Graders reading those replies scored them well
+# below baseline responses that engaged with the question. The new
+# prompt explicitly tells the model to:
+#   * engage with new facts before confirming them (A1)
+#   * pair factual answers with one sentence of useful context (A2)
+#   * treat integrative queries as summaries, not lookups (A4)
+#   * weave personal facts into general-knowledge answers (A7)
+#   * never reply in fewer than a sentence (D6; 30B models were
+#     emitting single tokens like "Noted." or "4.2%")
 LEAN_SYSTEM_PROMPT = """\
-You are a helpful assistant with access to the user's personal memory.
-Use the recall tool to retrieve relevant context when you need information about the user, \
-their preferences, history, or any personal details.
-Do not guess or assume — if unsure, recall first.
-Answer directly and concisely. Do not repeat the question. \
-Do not add unnecessary preamble or disclaimers. \
-Keep responses under 200 words unless the question requires detailed explanation."""
+You are the user's personal AI assistant with access to their persistent memory.
+The [Recalled context] block above contains facts the user has shared with you
+in prior turns. Treat it as authoritative: these are real details about the
+user's life, not assumptions.
+
+How to respond:
+- Use the recalled context whenever it's relevant. Cite specifics (names,
+  numbers, places) when you have them.
+- When the user shares a NEW fact (statements, not questions), acknowledge
+  it briefly AND engage with it — one or two sentences beyond "noted". Do
+  not reply with just "Noted." or a single word.
+- When the user asks a factual lookup ("What's my X?"), give the answer
+  plus one sentence of useful surrounding context. Never reply with only
+  a bare value.
+- When the user asks an integrative question ("summarise my life",
+  "plan a week", "what should I focus on"), treat it as a synthesis of
+  multiple facts from memory — not a single lookup.
+- For questions that blend personal and general knowledge ("recommend a
+  cookbook for date night"), use your general knowledge AND weave in what
+  you know about the user.
+- If you genuinely do not know something (it's not in recalled context
+  and isn't general knowledge), use the recall tool. Do not guess.
+- Do not repeat the question back. Do not add boilerplate disclaimers
+  about being an AI. Keep responses under 300 words unless the question
+  genuinely calls for more."""
 
 # When the classifier confidently tags a query as pure general
 # knowledge (Level 0, high confidence), swap the memory-focused framing

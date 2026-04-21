@@ -49,6 +49,33 @@ def _is_enumeration_query(query: str) -> bool:
     return bool(_ENUMERATION_QUERY_PATTERN.search(query or ""))
 
 
+# A4: integrative query detection. "Summarise my life", "plan a week",
+# "what should I focus on", "write a bio". These need a wider fact budget
+# than single-fact lookups — typical lookups hit 5 facts, integrative
+# queries benefit from 15+ so the composer can synthesise rather than
+# snip.
+_INTEGRATIVE_QUERY_PATTERN = re.compile(
+    r"\b(summari[sz]e\s+(?:my|our|your)|"
+    r"write\s+(?:a\s+)?(?:bio|cover\s+letter|life\s+summary|letter)\s+"
+    r"(?:about|for|to)\s+(?:me|myself|my)|"
+    r"based\s+on\s+(?:everything|all|what\s+you\s+know)|"
+    r"plan\s+(?:my|our|a\s+\w+\s+for\s+me)|"
+    r"give\s+me\s+advice|advice\s+(?:for|would\s+you\s+give)|"
+    r"tell\s+me\s+about\s+(?:my|myself)|"
+    r"what\s+(?:should|would|can)\s+i|"
+    r"how\s+has\s+my\s+|how\s+have\s+my\s+|"
+    r"(?:most|what)\s+(?:important|priority)|"
+    r"everything\s+you\s+know|"
+    r"budget\s+(?:breakdown|for\s+the\s+next))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_integrative_query(query: str) -> bool:
+    """True when the query needs synthesis across many stored facts."""
+    return bool(_INTEGRATIVE_QUERY_PATTERN.search(query or ""))
+
+
 _TEMPORAL_QUERY_PATTERN = re.compile(
     r"\b(over time|over the years|progression|progress|"
     r"has changed|have changed|how (?:has|have).+changed|"
@@ -177,6 +204,13 @@ class ContextRetriever:
         if is_enumeration:
             k = max(k, _MAX_FACTS)
             logger.info("Enumeration query: widened top_k to %d", k)
+        # A4: integrative queries ("summarise my life", "plan a week",
+        # "what should I focus on") need to synthesise across many facts.
+        # Widen the retrieval window so the composer has enough material.
+        is_integrative = _is_integrative_query(query)
+        if is_integrative:
+            k = max(k, _MAX_FACTS)
+            logger.info("Integrative query: widened top_k to %d", k)
 
         # ── 1. Vector search — widened candidate pool ─────────────────────
         candidate_limit = k * _CANDIDATE_MULTIPLIER if _MMR_ENABLED else k
@@ -245,7 +279,7 @@ class ContextRetriever:
                 # Enumeration queries bypass the floor — an exhaustive list
                 # needs every matching entity, even lower-scored ones.
                 _RERANK_FLOOR = -5.0
-                if vector_facts and not is_enumeration:
+                if vector_facts and not is_enumeration and not is_integrative:
                     best = vector_facts[0]
                     kept = [best] + [
                         f for f in vector_facts[1:]
