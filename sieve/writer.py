@@ -322,11 +322,35 @@ def _trim_name_capture(candidate: str, original_text: str) -> str:
     return " ".join(kept)
 
 
+_PURE_QUESTION_RE = re.compile(
+    r"^\s*(what|when|where|why|who|whom|whose|which|how|is|are|was|were|"
+    r"do|does|did|have|has|had|can|could|will|would|should|shall|may|might|"
+    r"am|am i|did i|can i|do i|will i|have i|will you|can you|could you)\b",
+    re.IGNORECASE,
+)
+
+
 def extract_facts_s1(text: str) -> list[ExtractedFact]:
     """Stage 1: regex extraction from a single text string.
 
     Returns extracted fact candidates. Fast (<2ms). No LLM.
+
+    D1/D18: pure interrogative turns are skipped. S1 patterns were
+    extracting "User's hamster is Nibbles's" from the trap query
+    "What time is my hamster Nibbles's vet appointment?" — the regex
+    caught "my hamster Nibbles" as a relationship fact. Rejecting
+    single-sentence question turns before pattern matching is the
+    simplest correct fix.
     """
+    stripped = text.strip()
+    if (
+        stripped.endswith("?")
+        and stripped.count("?") == 1
+        and stripped.count(".") == 0
+        and _PURE_QUESTION_RE.match(stripped)
+    ):
+        return []
+
     results: list[ExtractedFact] = []
     seen_contents: set[str] = set()
 
@@ -576,6 +600,29 @@ Thoroughness directive (read before every extraction):
   question, no self-reference, no named people) may legitimately yield
   0 facts. Do not invent.
 
+GROUNDING RULE (D24):
+  Every extracted fact must be directly supported by text that appears
+  IN THIS MESSAGE. Do not carry forward entities from imagined prior
+  context. Do not extract facts about people, places, dates, or objects
+  that are not named or clearly referenced in THIS message.
+
+  Example — correct grounding:
+    Input: "Sam works as a physiotherapist at the Royal Bristol Infirmary."
+    OK:    "Sam works as a physiotherapist at the Royal Bristol Infirmary"
+    OK:    "Sam's employer is the Royal Bristol Infirmary"
+    NOT OK: "User's sister is Amy"    (Amy is not in this message)
+    NOT OK: "Sam is the user's wife"  (not stated in this message)
+
+  If the message doesn't contain the subject OR object of a proposed
+  fact, DO NOT emit that fact.
+
+QUESTION RULE:
+  If the entire message is a question or request ("How is X doing?",
+  "What time is Y?"), return {"facts": []}. Questions are not
+  assertions. The trap pattern is "How is my brother Tom doing?" —
+  this is the user asking about a brother named Tom, NOT asserting
+  one exists. Do not extract "User's brother is Tom" from it.
+
 Worked example. Input message:
   "My wife Sam's birthday is coming up on the 22nd. She mentioned
    wanting to try The Ox restaurant in Bristol."
@@ -813,10 +860,30 @@ def _s2_gate(text: str, s1_facts: list[ExtractedFact]) -> bool:
     """Stage 2 gate: should we invoke the LLM for deeper extraction?
 
     Triggers when: >10 words AND (proper nouns that S1 didn't cover OR complex content).
+
+    D18/D1: skip on pure interrogative turns. The 30-day run showed the
+    S2 writer extracting "User's brother is Tom" from "How is my brother
+    Tom doing?" — a trap question. Questions ending with '?' and no
+    declarative content are rejected early, preventing the most common
+    class of trap-ingestion regardless of downstream validator coverage.
     """
     words = text.split()
     if len(words) < 6:
         return False
+
+    # D18/D1: pure question turns — reject before any keyword check.
+    # A turn is "pure interrogative" when it's a single sentence ending
+    # in '?' and starts with a question word. Declarative+question turns
+    # (e.g. "Mum moved to Bristol. Is that OK?") still open the gate.
+    stripped = text.strip()
+    if stripped.endswith("?") and stripped.count("?") == 1 and stripped.count(".") == 0:
+        if re.match(
+            r"^\s*(what|when|where|why|who|whom|whose|which|how|is|are|was|were|"
+            r"do|does|did|have|has|had|can|could|will|would|should|shall|may|might|"
+            r"am|did i|can i|do i|will i|have i)\b",
+            stripped, re.IGNORECASE,
+        ):
+            return False
 
     # Strong-signal keywords that always open the gate (personal facts S1 often misses)
     if re.search(

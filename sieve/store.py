@@ -633,9 +633,15 @@ class MemoryStore:
         return self._row_to_dict("entities", row)
 
     def find_entity_by_name(self, name: str) -> dict[str, Any] | None:
-        """Find an entity by exact name match."""
+        """Find an entity by case-insensitive name match.
+
+        D38: prior exact-match behaviour fragmented "Mum" vs "mum" vs
+        "MUM" into 3 separate entities. Case-folded LIKE retains an
+        existing entity across surface-form variation.
+        """
         row = self.conn.execute(
-            "SELECT * FROM entities WHERE name = ?", (name,)
+            "SELECT * FROM entities WHERE LOWER(name) = LOWER(?) "
+            "ORDER BY created_at ASC LIMIT 1", (name,)
         ).fetchone()
         if row is None:
             return None
@@ -650,7 +656,32 @@ class MemoryStore:
         target_entity: str,
         confidence: float = 0.7,
     ) -> str:
-        """Insert a relationship between two entities. Returns relationship ID."""
+        """Insert a relationship between two entities. Returns relationship ID.
+
+        D40: if an identical current edge already exists (same source,
+        relationship, target), reuse it instead of creating a duplicate.
+        The first 30-day run accumulated 2-3 duplicate edges per
+        relationship (e.g. User → sister → Amy appeared 3 times with
+        different confidences). Dedup at insert time with confidence
+        merged via max().
+        """
+        existing = self.conn.execute(
+            """SELECT id, confidence FROM relationships
+               WHERE source_entity = ? AND LOWER(relationship) = LOWER(?)
+                 AND target_entity = ? AND status = 'current'
+               LIMIT 1""",
+            (source_entity, relationship, target_entity),
+        ).fetchone()
+        if existing is not None:
+            existing_id, existing_conf = existing[0], existing[1]
+            merged = max(existing_conf or 0.0, confidence)
+            if merged != existing_conf:
+                self.conn.execute(
+                    "UPDATE relationships SET confidence = ? WHERE id = ?",
+                    (merged, existing_id),
+                )
+                self.conn.commit()
+            return existing_id
         rel_id = _new_id()
         self.conn.execute(
             """INSERT INTO relationships

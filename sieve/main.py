@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -1012,6 +1013,28 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             return "", [], [], False
         if not user_text.strip():
             return "", [], [], False
+
+        # D4: meta-questions about Sieve's own state ("how many facts do
+        # you know about me?", "what do you know about me?") — without
+        # this, retrieval returns the top-k query-similar facts and the
+        # LLM reports THAT count as its knowledge. The first 30-day run
+        # answered "14 facts" when the store actually had 104.
+        _META_COUNT_PATTERN = re.compile(
+            r"\bhow many (facts|things|details|pieces (of info)?) "
+            r"(do|are|have)\s+you (know|have|stored|remember)", re.IGNORECASE,
+        )
+        if _META_COUNT_PATTERN.search(user_text):
+            try:
+                fact_total = memory_store.count_current_facts()
+            except Exception:
+                fact_total = 0
+            meta_block = (
+                f"[META] You currently have {fact_total} facts stored about the user "
+                f"in your persistent memory. When answering meta questions about what "
+                f"you know, cite this number.\n"
+            )
+            logger.info("D4 meta-question injected: %d facts", fact_total)
+            return meta_block, [], [], False
 
         # EXTREME narrative summary — computed up-front so it
         # applies whether or not the classifier decides retrieval is
