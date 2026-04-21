@@ -162,7 +162,11 @@ class QueryClassifier:
         store: MemoryStore instance (used for L1 entity name lookup + vector search).
         embed_fn: async callable(text) -> list[float].  Required for L1.
                   If None, L1 is skipped (L0 only).
-        l1_threshold: cosine similarity threshold for L1 (default 0.7).
+        l1_threshold: cosine similarity threshold for L1 (default 0.55).
+            D27: was 0.70 originally, which rejected real personal queries
+            scoring 0.54-0.56 ("my ideal week", "future self", "most important
+            thing") because abstract personal references don't embed close
+            to concrete stored facts.
                       Above this → relevant context exists → retrieve.
     """
 
@@ -170,7 +174,7 @@ class QueryClassifier:
         self,
         store: Any,
         embed_fn: Any | None = None,
-        l1_threshold: float = 0.7,
+        l1_threshold: float = 0.55,
     ) -> None:
         self._store = store
         self._embed_fn = embed_fn
