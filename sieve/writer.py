@@ -1541,7 +1541,19 @@ _VALUE_PREDICATES: list[tuple[re.Pattern, str]] = [
     # contradict ('fixed at 3.1%' vs 'higher than 3.1%') but same
     # framing boosts ('3.1%' vs '3.1%'). The captured group is the
     # normalised tail of the sentence, ignoring stopword prefixes.
-    (re.compile(r"^mortgage rate (?:is |is\s+)?(.+?)(?:\s+until\s+\w+)?$"), "mortgage_rate"),
+    # D14/D15: widened to accept "mortgage interest rate" and the
+    # "the mortgage X rate" framing that S2 emits — in the first
+    # 30-day run, 4.2% was stored as "The mortgage interest rate is
+    # 4.2%." while 3.8% was "User's mortgage rate is 3.8%" — one
+    # matched the predicate, the other didn't, so the contradiction
+    # check missed them and both stayed current.
+    (re.compile(r"^(?:the\s+)?mortgage (?:interest\s+|annual\s+|monthly\s+|variable\s+|fixed\s+)?rate (?:is |is\s+)?(.+?)(?:\s+until\s+\w+)?\.?$"), "mortgage_rate"),
+    # Mortgage balance — "mortgage is about £240K", "mortgage balance is £230K"
+    (re.compile(r"^(?:the\s+)?(?:remaining\s+|current\s+)?mortgage (?:balance |amount )?is (?:about |approximately )?(.+?)\.?$"), "mortgage_balance"),
+    # Half-marathon / running pace — 5:30/km etc.
+    (re.compile(r"^(?:current\s+)?(?:half(?:\s+marathon)?\s+)?(?:running\s+)?pace (?:is |is\s+)?(.+?)\.?$"), "running_pace"),
+    # Bouldering grade
+    (re.compile(r"^(?:current\s+)?bouldering grade (?:is |is\s+)?(.+?)\.?$"), "bouldering_grade"),
     # Family relation → name. "<relation> is [named] <Name>" where
     # relation is a fixed slot and the object is a single- or two-token
     # proper name. The trailing object must not start with an article
