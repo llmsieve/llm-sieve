@@ -31,6 +31,24 @@ logger = logging.getLogger("recall.retrieval")
 # structured (timeline-grouped) format. Single-fact lookups regress under
 # structured because of elaboration noise. The auto mode dispatches based
 # on a small keyword set in the query text.
+# D22/D5: enumeration queries need a type-scoped scan, not vector k-NN.
+# "List all my pets", "how many dogs", "every person in my life" all want
+# every matching entity back, not a semantic-similarity top-5.
+_ENUMERATION_QUERY_PATTERN = re.compile(
+    r"\b(list\s+(?:all|every)|tell\s+me\s+about\s+all|"
+    r"all\s+(?:the\s+)?(?:my|our|your)|"
+    r"every\s+(?:person|pet|member|member of|one of)|"
+    r"how\s+many|what\s+are\s+all|who\s+are\s+all|"
+    r"all\s+my\s+|all\s+our\s+)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_enumeration_query(query: str) -> bool:
+    """True when the query asks for an exhaustive list or count of a type."""
+    return bool(_ENUMERATION_QUERY_PATTERN.search(query or ""))
+
+
 _TEMPORAL_QUERY_PATTERN = re.compile(
     r"\b(over time|over the years|progression|progress|"
     r"has changed|have changed|how (?:has|have).+changed|"
@@ -152,6 +170,14 @@ class ContextRetriever:
         if self._store._conn is None:
             return RetrievedContext(query=query)
 
+        # D22/D5: enumeration queries need a wider retrieval window.
+        # "List all pets" with top_k=5 after a reranker loses the third
+        # pet to reranker noise; widen to _MAX_FACTS and let MMR diversify.
+        is_enumeration = _is_enumeration_query(query)
+        if is_enumeration:
+            k = max(k, _MAX_FACTS)
+            logger.info("Enumeration query: widened top_k to %d", k)
+
         # ── 1. Vector search — widened candidate pool ─────────────────────
         candidate_limit = k * _CANDIDATE_MULTIPLIER if _MMR_ENABLED else k
         vector_facts: list[dict] = []
@@ -197,6 +223,42 @@ class ContextRetriever:
                     ordered[0][0] if ordered else 0.0,
                     ordered[-1][0] if ordered else 0.0,
                 )
+                # D29: reranker score floor.
+                #
+                # The cross-encoder emits log-odds-style scores; empirically
+                # across the first 30-day run, 73% of queries had top
+                # rerank_score < 0 and 46% had top < -5, meaning retrieval
+                # was returning facts that the reranker itself judged poorly
+                # matched to the query. Messages where top_score > +5
+                # averaged +0.13 accuracy gap; top_score < -5 averaged
+                # -0.06. Drop anything below the floor so retrieval
+                # returns FEWER facts when nothing matches well, rather
+                # than padding the context with irrelevant matches that
+                # mislead the composer.
+                #
+                # Floor chosen conservatively at -5: preserves roughly the
+                # top-54% of candidates and doesn't starve retrieval on
+                # weaker-but-still-useful matches. Keep the top-1
+                # unconditionally so a query that genuinely has only weak
+                # matches still gets its best effort.
+                #
+                # Enumeration queries bypass the floor — an exhaustive list
+                # needs every matching entity, even lower-scored ones.
+                _RERANK_FLOOR = -5.0
+                if vector_facts and not is_enumeration:
+                    best = vector_facts[0]
+                    kept = [best] + [
+                        f for f in vector_facts[1:]
+                        if f.get("rerank_score", 0.0) >= _RERANK_FLOOR
+                    ]
+                    if len(kept) < len(vector_facts):
+                        logger.info(
+                            "Rerank floor: dropped %d/%d candidates below %.1f",
+                            len(vector_facts) - len(kept),
+                            len(vector_facts),
+                            _RERANK_FLOOR,
+                        )
+                    vector_facts = kept
 
         # ── 2. Filter status, collect entity IDs ──────────────────────────
         entity_ids: set[str] = set()
@@ -249,6 +311,12 @@ class ContextRetriever:
             _GRAPH_ADD_CAP = max(_GRAPH_RESERVE, final_cap - len(primary_facts))
         else:
             _GRAPH_ADD_CAP = max(1, final_cap - len(primary_facts))
+        # D28: enumeration queries ("every person", "list all pets") get a
+        # wider graph budget so related entities aren't capped at 3.
+        # Without this, "list every person" retrieves User + 2 primary facts
+        # and then only 3 graph-hop entities — missing half the family.
+        if is_enumeration:
+            _GRAPH_ADD_CAP = max(_GRAPH_ADD_CAP, _MAX_FACTS)
 
         for entity_id in entity_ids:
             if graph_hit_count >= _GRAPH_ADD_CAP:

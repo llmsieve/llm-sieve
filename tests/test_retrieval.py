@@ -790,3 +790,28 @@ class TestRetrieveMulti:
             final_top_k=4,
         )
         assert len(ctx.facts) <= 4
+
+
+# ─── D22/D5/D28: Enumeration queries ─────────────────────────────────────
+
+class TestEnumerationQueries:
+    """Enumeration queries ("list all pets", "how many dogs", "every
+    person in my life") need a wider retrieval window than single-fact
+    lookups — without this fix the 30-day run showed 'list all pets'
+    returning only Pepper even when Ziggy and Toast were in the store.
+    """
+
+    def test_is_enumeration_detects_list_all(self):
+        from sieve.retrieval import _is_enumeration_query
+        assert _is_enumeration_query("List all my pets.")
+        assert _is_enumeration_query("Tell me about all my pets.")
+        assert _is_enumeration_query("How many dogs do I have now?")
+        assert _is_enumeration_query("Who are all the people in my life?")
+        assert _is_enumeration_query("Every person in my life")
+
+    def test_is_enumeration_ignores_single_fact_lookups(self):
+        from sieve.retrieval import _is_enumeration_query
+        assert not _is_enumeration_query("What does Sam do for work?")
+        assert not _is_enumeration_query("Where does my mum live?")
+        assert not _is_enumeration_query("What's my mortgage rate?")
+        assert not _is_enumeration_query("Tell me about my sister.")
