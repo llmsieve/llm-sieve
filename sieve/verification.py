@@ -462,10 +462,20 @@ def build_absence_signals(
             _coverage_cache[category] = _store_coverage_score(store, category)
         return _coverage_cache[category]
 
+    # Pre-canonicalise the stored relation keys so query-side canonicalisation
+    # lines up. Without this, a stored "mum" edge misses a query for "mother"
+    # (both canonicalise to "mother" but the store keeps the raw surface form).
+    canonical_user_rels: dict[str, list[str]] = {}
+    for rel_key, targets in user_rels.items():
+        canon_key = _REL_CANONICAL.get(rel_key, rel_key)
+        canonical_user_rels.setdefault(canon_key, []).extend(targets)
+
     for word in _extract_relationship_words(query):
         canonical = _REL_CANONICAL.get(word, word)
-        in_store = canonical in user_rels or any(
-            canonical in k for k in user_rels.keys()
+        in_store = (
+            canonical in user_rels
+            or canonical in canonical_user_rels
+            or any(canonical in k for k in user_rels.keys())
         )
         in_facts = _has_relationship_in_facts(word, retrieved_facts)
         in_turns = any(_mentions_term(t, word) or _mentions_term(t, canonical)

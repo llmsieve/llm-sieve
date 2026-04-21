@@ -1165,6 +1165,26 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     is_pure_general = (
                         decision.level == 0 and decision.confidence >= 0.8
                     )
+                    # D25 guard: even when the classifier says "no retrieval",
+                    # downgrade pure-general whenever the store has
+                    # accumulated any meaningful history. A classifier
+                    # miss (e.g. "Write a bio about me" routed as pure-task)
+                    # would otherwise strip memory framing entirely and the
+                    # model would reply "I have no memory of you" on its
+                    # own user's data. Threshold: ≥10 facts means there's
+                    # enough personal context to risk being wrong.
+                    if is_pure_general and memory_store is not None:
+                        try:
+                            fact_total = memory_store.count_current_facts()
+                        except Exception:
+                            fact_total = 0
+                        if fact_total >= 10:
+                            logger.info(
+                                "Pure-G downgraded: store has %d facts, "
+                                "keeping memory framing (D25)",
+                                fact_total,
+                            )
+                            is_pure_general = False
                     return extreme_summary_text, [], [], is_pure_general
 
             assert ctx is not None  # all branches above either assign ctx or return

@@ -134,6 +134,30 @@ class TestBuildAbsenceSignals:
         derek_signals = [s for s in signals if "Derek" in s.text]
         assert derek_signals == []
 
+    def test_stored_surface_form_suppresses_canonical_query(self, store):
+        """D23: stored relation 'mum' (raw surface) must suppress the
+        absence signal for a 'mother' query. The canonicaliser maps both
+        to 'mother' but the old code only compared query-canonical to
+        store-raw keys, missing the match."""
+        user_id = store.insert_entity("User", type="person")
+        mum_id = store.insert_entity("Mum", type="person")
+        sis_id = store.insert_entity("Sis", type="person")
+        # Store the raw surface form "mum" as the relation label — this is
+        # what the writer actually produced in the first 30-day run.
+        store.insert_relationship(user_id, "mum", mum_id, confidence=0.95)
+        store.insert_relationship(user_id, "sister", sis_id, confidence=0.95)
+        # Coverage gate: seed enough facts to put family coverage at 1.0.
+        for i in range(110):
+            store.insert_fact(f"Filler #{i}", confidence=0.8)
+
+        signals = build_absence_signals("Where does my mum live?", [], store)
+        assert all("mother" not in s.text.lower() and "mum" not in s.text.lower()
+                   for s in signals), [s.text for s in signals]
+        # And also the canonical "mother" query must be covered.
+        signals2 = build_absence_signals("Where does my mother live?", [], store)
+        assert all("mother" not in s.text.lower() and "mum" not in s.text.lower()
+                   for s in signals2), [s.text for s in signals2]
+
     # ── Q64 widening: assertion / recent-turn suppression ──────────────
 
     def test_possessive_assertion_in_query_suppresses(self, store):

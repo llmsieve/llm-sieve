@@ -43,6 +43,17 @@ _PHRASAL_ME = re.compile(
     r"\b(tell|show|give|explain|teach|describe|help|walk)\s+(to\s+)?me\b",
     re.IGNORECASE,
 )
+# Personal 'me' — not phrasal, refers to the user themselves. Catches
+# "Write a bio about me", "What would suit me?", "advice for me" (D25).
+# The regex requires 'me' as the object of a preposition or end-of-sentence
+# so it doesn't overlap with _PHRASAL_ME.
+_PERSONAL_ME = re.compile(
+    r"\b(about|for|to|by|of|like|suit|matches?|toward|regarding|"
+    r"against|concerning|with|without)\s+me\b"
+    r"|\bme\s*[.?!]"
+    r"|\bme\b$",
+    re.IGNORECASE,
+)
 _PRIOR_CONTEXT = re.compile(
     r"\b(last time|previously|before|earlier|yesterday|last week|"
     r"you (said|told|mentioned|remember)|remember when|as (I|we) (said|mentioned|discussed))\b",
@@ -215,6 +226,11 @@ class QueryClassifier:
 
         # ── Positive signals ─────────────────────────────────────────────────
         has_personal_pronoun = bool(_PERSONAL_PRONOUN.search(query))
+        # D25: also flag 'me' used as a personal object ("bio about me",
+        # "what suits me"). Distinct from _PHRASAL_ME ("tell me about X").
+        has_personal_me = bool(_PERSONAL_ME.search(query)) and not bool(_PHRASAL_ME.search(query))
+        if has_personal_me:
+            has_personal_pronoun = True
         has_prior_context = bool(_PRIOR_CONTEXT.search(query))
         has_temporal_personal = bool(_TEMPORAL_PERSONAL.search(query))
         has_personal_question = bool(_PERSONAL_QUESTION.search(query))
