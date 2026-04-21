@@ -535,8 +535,10 @@ class TestRelativeDateResolution:
             "Amy is visiting next weekend.",
             datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
         )
-        assert "2026-01-17" in out
-        assert "originally 'next weekend'" in out
+        # Fix 4: natural-language date, no (originally ...) parenthetical.
+        assert "Saturday" in out and "17" in out and "2026" in out
+        assert "originally" not in out
+        assert "next weekend" not in out
 
     def test_resolves_next_month(self):
         from datetime import datetime, timezone
@@ -545,7 +547,8 @@ class TestRelativeDateResolution:
             "Pepper needs her vaccination next month.",
             datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
         )
-        assert "2026-02-01" in out
+        assert "February 2026" in out
+        assert "next month" not in out
 
     def test_ignores_absolute_dates(self):
         from datetime import datetime, timezone

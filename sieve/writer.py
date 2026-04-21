@@ -646,6 +646,19 @@ QUESTION RULE:
   this is the user asking about a brother named Tom, NOT asserting
   one exists. Do not extract "User's brother is Tom" from it.
 
+POLARITY RULE (D41 / children leak):
+  When the user mentions a relationship in passing that belongs to
+  SOMEONE ELSE, do not re-attach it to the user. Examples:
+    "Amy is visiting with the kids"     → Amy has kids, NOT user has kids
+    "Sam's mother called"                → Sam has a mother, NOT user's
+                                             mother
+    "Marcus and his wife came over"     → Marcus has a wife, NOT user
+  Rule of thumb: if a kinship word ("kids", "mother", "wife",
+  "children") follows a 3rd-person possessive (her, his, their) OR
+  follows another named person with "with" / "and", that relationship
+  belongs to the named person — NOT to the user. Do NOT emit a fact
+  making the user the possessor.
+
 Worked example. Input message:
   "My wife Sam's birthday is coming up on the 22nd. She mentioned
    wanting to try The Ox restaurant in Bristol."
@@ -861,6 +874,26 @@ def _validate_s2_fact(
     if pats["pat3b"] is not None and pats["pat3b"].search(content):
         return (False, "duplicate")
 
+    # Rule 5 (D41/children leak): reject assertions that the user has
+    # unnamed children / kids. S2 was extracting "User has children" or
+    # "User's children are visiting" from turns like "Amy is visiting
+    # with the kids" — where the kids belong to Amy, not the user.
+    # Legitimate child facts always name the child (msg: "my son Jake").
+    content_lc = content.lower()
+    _CHILD_PHRASES = (
+        "user has children", "user has kids", "user's children",
+        "user's kids", f"{owner_first.lower()} has children",
+        f"{owner_first.lower()} has kids",
+        f"{owner_first.lower()}'s children",
+        f"{owner_first.lower()}'s kids",
+    )
+    if any(p in content_lc for p in _CHILD_PHRASES):
+        # Unless a specific child name is present — "User's children
+        # include Freddie and Max" is still legitimate. Check for a
+        # capitalised name after the kinship word.
+        if not re.search(r"\b(?:child(?:ren)?|kids?)\b[^.!?\n]*?\b[A-Z][a-z]{2,}\b", content):
+            return (False, "unnamed_child")
+
     # Rule 4: "<owner> lives/resides/stays with <X>" where <X> is a
     # known family-first-name. Two-stage regex: first find the head
     # ("Jamie Rivera lives with "), then scan the tail for any
@@ -901,9 +934,12 @@ def _resolve_relative_dates(content: str, now) -> str:
     """Replace relative-date tokens in fact content with resolved dates.
 
     ``now`` is a timezone-aware datetime. For each matched relative
-    expression, replace with "{ISO_DATE} (originally 'phrase')" so the
-    resolved absolute date becomes retrieval-indexable while the
-    original phrasing is preserved for trace.
+    expression, replace with a natural-language absolute date
+    ("Saturday 17 Jan 2026"). The earlier "(originally 'X')"
+    parenthetical was dropped in Fix 4 — it penalised Sieve in
+    grading for verbosity and confused the composer. Original phrase
+    is not preserved inline; callers that need audit trail should
+    diff against the pre-resolve content.
     """
     if not content or now is None:
         return content
@@ -916,18 +952,25 @@ def _resolve_relative_dates(content: str, now) -> str:
             days_ahead = 7
         return ref + timedelta(days=days_ahead)
 
+    def _fmt(d):
+        # "Saturday 17 Jan 2026" — compact, unambiguous, composer-friendly.
+        return d.strftime("%A %-d %b %Y")
+
+    def _fmt_month(d):
+        return d.strftime("%B %Y")
+
     replacements = {
-        "next_weekend": _weekend_of(now).date().isoformat(),
-        "this_weekend": (_weekend_of(now) - timedelta(days=7)).date().isoformat()
-            if now.weekday() < 5 else now.date().isoformat(),
-        "last_weekend": (_weekend_of(now) - timedelta(days=7)).date().isoformat(),
-        "next_week": (now + timedelta(days=7)).date().isoformat(),
-        "last_week": (now - timedelta(days=7)).date().isoformat(),
-        "next_month": (now.replace(day=1) + timedelta(days=32)).replace(day=1).date().isoformat(),
-        "last_month": (now.replace(day=1) - timedelta(days=1)).replace(day=1).date().isoformat(),
-        "yesterday": (now - timedelta(days=1)).date().isoformat(),
-        "tomorrow": (now + timedelta(days=1)).date().isoformat(),
-        "today": now.date().isoformat(),
+        "next_weekend": _fmt(_weekend_of(now).date()),
+        "this_weekend": _fmt((_weekend_of(now) - timedelta(days=7)).date())
+            if now.weekday() < 5 else _fmt(now.date()),
+        "last_weekend": _fmt((_weekend_of(now) - timedelta(days=7)).date()),
+        "next_week": _fmt((now + timedelta(days=7)).date()),
+        "last_week": _fmt((now - timedelta(days=7)).date()),
+        "next_month": _fmt_month((now.replace(day=1) + timedelta(days=32)).replace(day=1).date()),
+        "last_month": _fmt_month((now.replace(day=1) - timedelta(days=1)).replace(day=1).date()),
+        "yesterday": _fmt((now - timedelta(days=1)).date()),
+        "tomorrow": _fmt((now + timedelta(days=1)).date()),
+        "today": _fmt(now.date()),
     }
 
     out = content
@@ -935,10 +978,7 @@ def _resolve_relative_dates(content: str, now) -> str:
         m = rx.search(out)
         if m is None:
             continue
-        resolved = replacements[key]
-        original_phrase = m.group(0)
-        replacement = f"{resolved} (originally '{original_phrase}')"
-        out = rx.sub(replacement, out, count=1)
+        out = rx.sub(replacements[key], out, count=1)
     return out
 
 
@@ -1974,6 +2014,7 @@ class MemoryWriter:
             kept: list[ExtractedFact] = []
             rejected_counts = {
                 "identity": 0, "duplicate": 0, "relative_cohabitation": 0,
+                "unnamed_child": 0,
             }
             for cand in all_candidates:
                 if id(cand) not in s2_ids:
