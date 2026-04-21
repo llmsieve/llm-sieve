@@ -140,3 +140,39 @@ def test_schema_v2_flag_loaded_from_yaml(tmp_path):
     p.write_text(yaml.safe_dump({"ablation": {"schema_v2": True}}))
     cfg = RecallConfig.load(p)
     assert cfg.ablation.schema_v2 is True
+
+
+def test_empty_yaml_produces_dataclass_defaults(tmp_path):
+    """Loading an empty YAML must yield the exact same config as RecallConfig().
+
+    This guards against loader defaults drifting from dataclass defaults — a
+    bug that previously flipped closed_world, response_verification, and
+    extreme_summary from their documented shipping values, because
+    ``sieve init`` writes a minimal yaml that exercises every absent-key
+    branch of the loader.
+    """
+    p = tmp_path / "sieve.yaml"
+    p.write_text("")  # completely empty config
+    loaded = RecallConfig.load(p)
+    dataclass_default = RecallConfig()
+
+    # Compare ablation block field-by-field so a failure names the field.
+    for field_name in dataclass_default.ablation.__dataclass_fields__:
+        assert getattr(loaded.ablation, field_name) == getattr(
+            dataclass_default.ablation, field_name
+        ), (
+            f"ablation.{field_name}: loader default "
+            f"{getattr(loaded.ablation, field_name)!r} != dataclass default "
+            f"{getattr(dataclass_default.ablation, field_name)!r}"
+        )
+    # And the other config sections that have the same drift risk.
+    assert loaded.writer.model == dataclass_default.writer.model
+    assert (
+        loaded.writer.ghost_validator_enabled
+        == dataclass_default.writer.ghost_validator_enabled
+    )
+    assert loaded.tools.enabled == dataclass_default.tools.enabled
+    assert (
+        loaded.retrieval.temporal_dedup_enabled
+        == dataclass_default.retrieval.temporal_dedup_enabled
+    )

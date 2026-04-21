@@ -422,23 +422,27 @@ def _build_config(raw: dict) -> RecallConfig:
         max_tools_injected=int(tools_raw.get("max_tools_injected", 10)),
     )
 
+    # Loader defaults MUST match AblationConfig dataclass defaults so an
+    # empty or minimal yaml produces the documented shipping behaviour.
+    # See test_empty_yaml_produces_dataclass_defaults for the invariant.
+    ablation_defaults = AblationConfig()
     ablation_raw = raw.get("ablation", {})
     ablation = AblationConfig(
-        fingerprinting=bool(ablation_raw.get("fingerprinting", True)),
-        classifier=bool(ablation_raw.get("classifier", True)),
-        pre_populate=bool(ablation_raw.get("pre_populate", True)),
-        graph_traversal=bool(ablation_raw.get("graph_traversal", True)),
-        temporal_versioning=bool(ablation_raw.get("temporal_versioning", True)),
-        learning_loop=bool(ablation_raw.get("learning_loop", True)),
-        coherence_integrity=bool(ablation_raw.get("coherence_integrity", True)),
-        stage2_writer=bool(ablation_raw.get("stage2_writer", True)),
-        recall_tool=bool(ablation_raw.get("recall_tool", True)),
-        absence_signal=bool(ablation_raw.get("absence_signal", True)),
-        closed_world=bool(ablation_raw.get("closed_world", True)),
-        response_verification=bool(ablation_raw.get("response_verification", True)),
-        schema_v2=bool(ablation_raw.get("schema_v2", False)),
-        tier2_classifier=bool(ablation_raw.get("tier2_classifier", False)),
-        extreme_summary=bool(ablation_raw.get("extreme_summary", False)),
+        fingerprinting=bool(ablation_raw.get("fingerprinting", ablation_defaults.fingerprinting)),
+        classifier=bool(ablation_raw.get("classifier", ablation_defaults.classifier)),
+        pre_populate=bool(ablation_raw.get("pre_populate", ablation_defaults.pre_populate)),
+        graph_traversal=bool(ablation_raw.get("graph_traversal", ablation_defaults.graph_traversal)),
+        temporal_versioning=bool(ablation_raw.get("temporal_versioning", ablation_defaults.temporal_versioning)),
+        learning_loop=bool(ablation_raw.get("learning_loop", ablation_defaults.learning_loop)),
+        coherence_integrity=bool(ablation_raw.get("coherence_integrity", ablation_defaults.coherence_integrity)),
+        stage2_writer=bool(ablation_raw.get("stage2_writer", ablation_defaults.stage2_writer)),
+        recall_tool=bool(ablation_raw.get("recall_tool", ablation_defaults.recall_tool)),
+        absence_signal=bool(ablation_raw.get("absence_signal", ablation_defaults.absence_signal)),
+        closed_world=bool(ablation_raw.get("closed_world", ablation_defaults.closed_world)),
+        response_verification=bool(ablation_raw.get("response_verification", ablation_defaults.response_verification)),
+        schema_v2=bool(ablation_raw.get("schema_v2", ablation_defaults.schema_v2)),
+        tier2_classifier=bool(ablation_raw.get("tier2_classifier", ablation_defaults.tier2_classifier)),
+        extreme_summary=bool(ablation_raw.get("extreme_summary", ablation_defaults.extreme_summary)),
     )
 
     progression_raw = raw.get("progression") or {}
