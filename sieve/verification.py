@@ -36,6 +36,32 @@ from typing import Any, Iterable
 
 logger = logging.getLogger("recall.verification")
 
+# Imported lazily to avoid circular imports — only needed where owner
+# parametrisation is threaded through from callers.
+# from sieve.config import ProfileOwnerConfig  (see _owner_alias_set below)
+
+
+def _owner_alias_set(profile_owner: Any | None) -> frozenset[str]:
+    """Build a frozenset of lowercased owner aliases from a ProfileOwnerConfig.
+
+    Returns a minimal base set (``user``, ``the_user``, ``the user``) when
+    ``profile_owner`` is None or has no name — preserving backward compat.
+    """
+    base = {"user", "the_user", "the user", "theuser"}
+    if profile_owner is None:
+        return frozenset(base)
+    name = (profile_owner.name or "").strip()
+    if name:
+        base.add(name.lower())
+        parts = name.lower().split()
+        if parts:
+            base.add(parts[0])  # first name
+    for alias in getattr(profile_owner, "aliases", []):
+        a = (alias or "").strip().lower()
+        if a:
+            base.add(a)
+    return frozenset(base)
+
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -62,7 +88,7 @@ _RELATIONSHIP_WORDS = {
 # Words that look like proper nouns but should not be flagged as entity
 # references if missing from store — cities, common nouns, etc.
 _PROPER_NOUN_NOISE = frozenset({
-    "Jamie", "User",  # the user themselves
+    "User",  # generic anchor for the profile owner; owner names are added dynamically
     # Months / days are filtered by writer.extract_proper_nouns already, but
     # safety net here as well.
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
@@ -109,32 +135,57 @@ def _extract_relationship_words(query: str) -> set[str]:
     return found
 
 
-def _extract_query_proper_nouns(query: str) -> list[str]:
-    """Extract proper nouns from a query, ignoring sentence-initial wrappers."""
+def _extract_query_proper_nouns(
+    query: str,
+    extra_noise: frozenset[str] | None = None,
+) -> list[str]:
+    """Extract proper nouns from a query, ignoring sentence-initial wrappers.
+
+    ``extra_noise`` supplements ``_PROPER_NOUN_NOISE`` with owner-specific
+    names/aliases that should never be flagged as unknown entities (e.g. the
+    profile owner's first name).
+    """
+    noise = _PROPER_NOUN_NOISE
+    if extra_noise:
+        # Combine module-level noise with caller-supplied extras.
+        noise = noise | extra_noise
     out: list[str] = []
     for m in _PROPER_NOUN_PATTERN.finditer(query):
         word = m.group(1)
         head = word.split()[0]
-        if head in _PROPER_NOUN_NOISE:
+        if head in noise:
+            continue
+        # Also suppress if the lowercased full word or head is in extra_noise.
+        if extra_noise and (head.lower() in extra_noise or word.lower() in extra_noise):
             continue
         out.append(word)
     # dedupe while preserving order
     return list(dict.fromkeys(out))
 
 
-def _user_relationships(store: Any) -> dict[str, list[str]]:
+def _user_relationships(
+    store: Any,
+    owner_aliases: frozenset[str] | None = None,
+) -> dict[str, list[str]]:
     """Return a {relation_word: [target_entity_name, ...]} map for the user.
 
     Reads the relationships table for relationships sourced from the User entity.
     Uses fetchall() so the cursor isn't reused mid-iteration.
+
+    ``owner_aliases`` is the lowercased set of names/aliases that refer to the
+    profile owner (from ``_owner_alias_set``). Falls back to the minimal base
+    set (user/the_user) when not provided.
     """
     rel_map: dict[str, list[str]] = {}
     if store is None or store._conn is None:
         return rel_map
+    aliases = owner_aliases if owner_aliases is not None else _owner_alias_set(None)
+    placeholders = ",".join("?" for _ in aliases)
     try:
         cur = store._conn.cursor()
         row = cur.execute(
-            "SELECT id FROM entities WHERE lower(name) IN ('user','jamie','jamie rivera') LIMIT 1"
+            f"SELECT id FROM entities WHERE lower(name) IN ({placeholders}) LIMIT 1",
+            tuple(aliases),
         ).fetchone()
         if not row:
             return rel_map
@@ -211,7 +262,11 @@ def _relation_category(word: str) -> str:
     return "other"
 
 
-def _store_coverage_score(store: Any, category: str) -> float:
+def _store_coverage_score(
+    store: Any,
+    category: str,
+    owner_aliases: frozenset[str] | None = None,
+) -> float:
     """Compute a coverage confidence score in [0, 1] for *category*.
 
     Formula (per plan Fix 4):
@@ -227,9 +282,14 @@ def _store_coverage_score(store: Any, category: str) -> float:
 
     Returns 0.0 on any error / missing store so callers stay silent
     when confidence cannot be established.
+
+    ``owner_aliases`` is the lowercased set of names/aliases that refer to the
+    profile owner (from ``_owner_alias_set``).
     """
     if store is None or getattr(store, "_conn", None) is None:
         return 0.0
+    aliases = owner_aliases if owner_aliases is not None else _owner_alias_set(None)
+    placeholders = ",".join("?" for _ in aliases)
     try:
         cur = store._conn.cursor()
         facts_count_row = cur.execute(
@@ -248,8 +308,9 @@ def _store_coverage_score(store: Any, category: str) -> float:
         # Count distinct target entities linked to the user via a
         # relationship inside the bucket.
         user_row = cur.execute(
-            "SELECT id FROM entities "
-            "WHERE lower(name) IN ('user','jamie','jamie rivera') LIMIT 1"
+            f"SELECT id FROM entities "
+            f"WHERE lower(name) IN ({placeholders}) LIMIT 1",
+            tuple(aliases),
         ).fetchone()
         cat_entities = 0
         if user_row:
@@ -385,6 +446,7 @@ def build_absence_signals(
     retrieved_facts: list[dict],
     store: Any,
     recent_turns: list[dict] | None = None,
+    profile_owner: Any | None = None,
 ) -> list[AbsenceSignal]:
     """Layer 1 (v3): inject absence signals only when the query
     references a relation / proper noun that has NO supporting evidence
@@ -408,8 +470,14 @@ def build_absence_signals(
     Conversely "I need to pick up my daughter from school" has
     "daughter" in the possessive-assertion set and never fires a
     false negative.
+
+    ``profile_owner``: optional ProfileOwnerConfig whose name + aliases are
+    used to resolve the User entity in the store. When omitted, the minimal
+    base set (``user``/``the_user``) is used.
     """
     signals: list[AbsenceSignal] = []
+
+    owner_aliases = _owner_alias_set(profile_owner)
 
     asserted_terms = _assertion_terms_in_query(query)
     turn_texts = _recent_turn_contents(recent_turns)
@@ -454,12 +522,14 @@ def build_absence_signals(
     # authoritative — below _ABSENCE_COVERAGE_GATE we stay silent and
     # let the model answer from context rather than risk a false
     # negative.
-    user_rels = _user_relationships(store)
+    user_rels = _user_relationships(store, owner_aliases=owner_aliases)
     _coverage_cache: dict[str, float] = {}
 
     def _coverage(category: str) -> float:
         if category not in _coverage_cache:
-            _coverage_cache[category] = _store_coverage_score(store, category)
+            _coverage_cache[category] = _store_coverage_score(
+                store, category, owner_aliases=owner_aliases
+            )
         return _coverage_cache[category]
 
     # Pre-canonicalise the stored relation keys so query-side canonicalisation
@@ -528,7 +598,14 @@ def build_absence_signals(
     elif store is not None and store._conn is not None:
         try:
             cur = store._conn.cursor()
-            for noun in _extract_query_proper_nouns(query):
+            # Build owner-specific noise: names and aliases for the profile
+            # owner must never be flagged as unknown entities.
+            _owner_noise: frozenset[str] = frozenset(
+                a.title() for a in owner_aliases if a
+            ) | frozenset(
+                a.capitalize() for a in owner_aliases if a
+            )
+            for noun in _extract_query_proper_nouns(query, extra_noise=_owner_noise):
                 if noun.lower() in introduced_nouns:
                     continue
                 row = cur.execute(
@@ -719,43 +796,74 @@ _V3_RESPONSE_CLAIMS: list[tuple[re.Pattern, str]] = [
 # Store-side fact extractors. Handles "User's spouse Kim is a ..." style
 # fact formats that the writer's templates don't capture for cross-entity
 # attributes. Output shape: (subject_hint, predicate_key, object).
-_V3_STORE_PATTERNS: list[tuple[re.Pattern, str]] = [
-    # "User's role is VP of Product" / "Kim's job is teacher" — possessive form
-    (re.compile(
-        rf"(?P<subj>user|jamie|the user|[A-Z][a-zA-Z]+)'s\s+"
-        rf"(?:current\s+|new\s+)?(?:role|job|position|occupation|title)\s+is\s+"
-        rf"(?:a\s+|an\s+|the\s+)?(?P<obj>(?:\w+\s+){{0,3}}(?:{_JOB_ROLES_RX}))\b",
-        re.IGNORECASE,
-    ), "job_role"),
-    # "<anything> Kim is a history teacher" — capture role tail.
-    (re.compile(
-        rf"(?P<subj>[A-Z][a-zA-Z]+)\s+is\s+(?:a\s+|an\s+)?"
-        rf"(?:\w+\s+){{0,3}}(?P<obj>(?:\w+\s+)*(?:{_JOB_ROLES_RX}))\b",
-        re.IGNORECASE,
-    ), "job_role"),
-    # "<subj> works at X" / "works for X"
-    (re.compile(
-        r"(?P<subj>[A-Z][a-zA-Z]+)\s+works?\s+(?:at|for)\s+(?P<obj>[\w& ]+?)(?:[\.,;]|$)",
-        re.IGNORECASE,
-    ), "job_employer"),
-    # "User lives in X" — present tense only, past tense does not set a
-    # current residence and therefore cannot drive a contradiction.
-    (re.compile(
-        r"(?P<subj>user|jamie|the user)\s+lives?\s+in\s+(?P<obj>[\w ]+?)(?:[\.,;]|$)",
-        re.IGNORECASE,
-    ), "residence"),
-    # "User/Jamie is married/separated/..." and "User and Kim are separated"
-    (re.compile(
-        r"(?P<subj>user|jamie|the user)\s+(?:and\s+\w+\s+)?(?:is|are|have been|has been)\s+"
-        r"(?P<obj>married|engaged|separated|divorced|single|widowed)\b",
-        re.IGNORECASE,
-    ), "marital_state"),
-    # "User is N years old"
-    (re.compile(
-        r"(?P<subj>user|jamie|the user)\s+is\s+(?P<obj>\d+)\s+years?\s+old\b",
-        re.IGNORECASE,
-    ), "age"),
-]
+def _build_v3_store_patterns(
+    owner_aliases: frozenset[str] | None = None,
+) -> list[tuple[re.Pattern, str]]:
+    """Build the store-side fact extractor patterns with owner-aware subject groups.
+
+    The ``user`` alternative is always included. When ``owner_aliases`` contains
+    names in addition to the base set, they are added to the subject alternation
+    so that facts stored as "Taylor's role is ..." or "Taylor lives in ..." are
+    matched correctly.
+
+    Patterns are cached by the alias frozenset to avoid recompiling on every call.
+    """
+    # Build the owner-specific alternation for the "user-as-subject" patterns.
+    # Always include generic anchors; add any owner name / alias that isn't
+    # already covered by the generic [A-Z][a-zA-Z]+ in the possessive pattern.
+    owner_parts = {"user", "the user"}
+    if owner_aliases:
+        for a in owner_aliases:
+            # Include multi-word forms (e.g. "taylor kim") and single-word
+            # aliases (e.g. "taylor") so the regex captures them.
+            stripped = a.strip()
+            if stripped and stripped not in {"user", "the_user", "theuser", "the user"}:
+                owner_parts.add(stripped)
+    # Build escaped alternation sorted longest-first (greedy match).
+    owner_alts = "|".join(
+        re.escape(p) for p in sorted(owner_parts, key=len, reverse=True)
+    )
+    return [
+        # "User's role is VP of Product" / "Kim's job is teacher" — possessive form
+        (re.compile(
+            rf"(?P<subj>{owner_alts}|[A-Z][a-zA-Z]+)'s\s+"
+            rf"(?:current\s+|new\s+)?(?:role|job|position|occupation|title)\s+is\s+"
+            rf"(?:a\s+|an\s+|the\s+)?(?P<obj>(?:\w+\s+){{0,3}}(?:{_JOB_ROLES_RX}))\b",
+            re.IGNORECASE,
+        ), "job_role"),
+        # "<anything> Kim is a history teacher" — capture role tail.
+        (re.compile(
+            rf"(?P<subj>[A-Z][a-zA-Z]+)\s+is\s+(?:a\s+|an\s+)?"
+            rf"(?:\w+\s+){{0,3}}(?P<obj>(?:\w+\s+)*(?:{_JOB_ROLES_RX}))\b",
+            re.IGNORECASE,
+        ), "job_role"),
+        # "<subj> works at X" / "works for X"
+        (re.compile(
+            r"(?P<subj>[A-Z][a-zA-Z]+)\s+works?\s+(?:at|for)\s+(?P<obj>[\w& ]+?)(?:[\.,;]|$)",
+            re.IGNORECASE,
+        ), "job_employer"),
+        # "User lives in X" — present tense only, past tense does not set a
+        # current residence and therefore cannot drive a contradiction.
+        (re.compile(
+            rf"(?P<subj>{owner_alts})\s+lives?\s+in\s+(?P<obj>[\w ]+?)(?:[\.,;]|$)",
+            re.IGNORECASE,
+        ), "residence"),
+        # "User is married/separated/..." and "User and Kim are separated"
+        (re.compile(
+            rf"(?P<subj>{owner_alts})\s+(?:and\s+\w+\s+)?(?:is|are|have been|has been)\s+"
+            r"(?P<obj>married|engaged|separated|divorced|single|widowed)\b",
+            re.IGNORECASE,
+        ), "marital_state"),
+        # "User is N years old"
+        (re.compile(
+            rf"(?P<subj>{owner_alts})\s+is\s+(?P<obj>\d+)\s+years?\s+old\b",
+            re.IGNORECASE,
+        ), "age"),
+    ]
+
+
+# Module-level default (base aliases only) — used when no owner is available.
+_V3_STORE_PATTERNS: list[tuple[re.Pattern, str]] = _build_v3_store_patterns()
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -778,7 +886,7 @@ _SUBJECT_RX = re.compile(
 def _sentence_subject(sentence: str) -> str | None:
     """Best-effort guess at the subject of a sentence.
     Returns a capitalised name, or None. If the sentence uses a possessive
-    form ('Jamie's parents live in X'), return None — the grammatical subject
+    form (e.g. "Kim's parents live in X"), return None — the grammatical subject
     is the possessed noun, not the named entity, and treating it as a claim
     about the entity causes false positives on family-relation lookups.
     """
@@ -866,11 +974,18 @@ _SPECULATIVE_STORE_MARKERS = re.compile(
 )
 
 
-def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
+def _extract_store_triples(
+    content: str,
+    owner_aliases: frozenset[str] | None = None,
+) -> list[tuple[str, str, str]]:
     """Extract (subject_hint, predicate_key, object) triples from a stored
     fact content. Speculative / hypothetical facts are skipped so that
     'User is considering a senior PM role' does not contradict a later
     'User is VP of Product'.
+
+    ``owner_aliases`` is the lowercased set of names/aliases that refer to the
+    profile owner. When provided, the store-side patterns are built to also
+    match the owner's name so facts like "Taylor's role is VP" are captured.
     """
     out: list[tuple[str, str, str]] = []
     # Skip speculative facts entirely — they should never drive a
@@ -879,9 +994,11 @@ def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
         return out
 
     text = content.strip()
-    # Strip common user-possessive prefixes ("User's spouse Kim" -> "Kim")
+    # Strip common user-possessive prefixes ("User's spouse Kim" -> "Kim").
+    # The possessive-strip regex is kept generic (no owner name needed) because
+    # the writer always writes "User's spouse Kim", not "Taylor's spouse Kim".
     stripped = re.sub(
-        r"^(?:User's|the user's|Jamie's)\s+(?:spouse|husband|wife|partner|friend|"
+        r"^(?:User's|the user's)\s+(?:spouse|husband|wife|partner|friend|"
         r"colleague|boss|manager|mother|father|parent|son|daughter|child|"
         r"brother|sister|best friend|neighbor|neighbour)\s+",
         "",
@@ -889,7 +1006,21 @@ def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
         flags=re.IGNORECASE,
     )
 
-    for rx, key in _V3_STORE_PATTERNS:
+    # Use owner-aware patterns when alias set is provided.
+    patterns = (
+        _build_v3_store_patterns(owner_aliases)
+        if owner_aliases is not None
+        else _V3_STORE_PATTERNS
+    )
+
+    # Normalised owner alias set for subject canonicalisation.
+    _user_norm_set: frozenset[str] = (
+        owner_aliases
+        if owner_aliases is not None
+        else frozenset({"user", "the_user", "theuser", "the user"})
+    )
+
+    for rx, key in patterns:
         for m in rx.finditer(stripped):
             try:
                 subj = m.group("subj")
@@ -901,7 +1032,7 @@ def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
                 continue
             if not subj or not obj:
                 continue
-            subj_norm = "the_user" if subj.lower() in {"theuser", "user", "jamie", "the user"} else subj
+            subj_norm = "the_user" if subj.lower() in _user_norm_set else subj
             if key == "job_role":
                 role = _normalise_role(obj)
                 if role:
@@ -917,19 +1048,33 @@ def _extract_store_triples(content: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def _subjects_equivalent(a: str, b: str) -> bool:
-    """Whether two subject hints refer to the same entity."""
+def _subjects_equivalent(
+    a: str,
+    b: str,
+    user_aliases: frozenset[str] | None = None,
+) -> bool:
+    """Whether two subject hints refer to the same entity.
+
+    ``user_aliases`` is the lowercased set of names/aliases that all refer to
+    the profile owner. When not provided, only the generic base anchors
+    (``user``, ``the_user``, ``the user``, ``theuser``) are used — the
+    old hardcoded owner-name literals are no longer part of the default set.
+    """
     a_l = a.lower().strip()
     b_l = b.lower().strip()
     if a_l == b_l:
         return True
-    user_aliases = {"the_user", "theuser", "user", "jamie", "jamie rivera", "the user"}
-    if a_l in user_aliases and b_l in user_aliases:
+    effective_aliases: frozenset[str] = (
+        user_aliases
+        if user_aliases is not None
+        else frozenset({"the_user", "theuser", "user", "the user"})
+    )
+    if a_l in effective_aliases and b_l in effective_aliases:
         return True
     if not a_l or not b_l:
         return False
     # Allow first-name match (Kim ≡ Kim), but only for non-user tokens
-    if a_l in user_aliases or b_l in user_aliases:
+    if a_l in effective_aliases or b_l in effective_aliases:
         return False
     return a_l.split()[0] == b_l.split()[0]
 
@@ -937,13 +1082,28 @@ def _subjects_equivalent(a: str, b: str) -> bool:
 def _detect_claim_contradictions(
     response_text: str,
     store: Any,
+    owner_aliases: frozenset[str] | None = None,
 ) -> list[FlaggedClaim]:
     """Primary v3 detector: scan the response for predicate claims about
     known entities that contradict stored facts.
+
+    ``owner_aliases`` is the lowercased set of names/aliases that refer to the
+    profile owner. When provided, the owner's name/aliases are treated as
+    equivalent to 'user'/'the_user' for subject canonicalisation.
     """
     claims: list[FlaggedClaim] = []
     if store is None or store._conn is None:
         return claims
+
+    # Effective user-alias set for canonicalisation.
+    # Always include generic anchors; also add pronoun anchors (she/he)
+    # that the response extractor may emit.
+    _base_pronoun_anchors = frozenset({"she", "he"})
+    effective_aliases: frozenset[str] = (
+        (owner_aliases | _base_pronoun_anchors)
+        if owner_aliases is not None
+        else frozenset({"the user", "user", "the_user", "theuser", "she", "he"})
+    )
 
     # Build per-subject store triple index lazily (one lookup per subject).
     store_cache: dict[str, list[tuple[str, str, str, str]]] = {}
@@ -956,19 +1116,20 @@ def _detect_claim_contradictions(
         lookup_name = "user" if subject == "the_user" else subject
         facts = _fetch_entity_facts(lookup_name, store)
         # Also pull user facts when the subject is the owner's first name
-        if lookup_name.lower() == "jamie":
-            facts += _fetch_entity_facts("user", store)
+        # (any alias that isn't already 'user' itself).
+        lookup_l = lookup_name.lower()
+        if lookup_l in effective_aliases and lookup_l not in ("user", "the_user",
+                                                               "theuser", "the user"):
+            facts = facts + _fetch_entity_facts("user", store)
         triples: list[tuple[str, str, str, str]] = []
         for f in facts:
-            for (subj_h, k, obj) in _extract_store_triples(f):
+            for (subj_h, k, obj) in _extract_store_triples(f, owner_aliases):
                 triples.append((subj_h, k, obj, f))
         store_cache[key_norm] = triples
         return triples
 
-    user_aliases = {"jamie", "jamie rivera", "the user", "user", "the_user", "she", "he"}
-
     def _canon_subj(subj: str) -> str:
-        return "the_user" if subj.lower() in user_aliases else subj
+        return "the_user" if subj.lower() in effective_aliases else subj
 
     seen: set[tuple[str, str, str]] = set()
     for sentence in _split_sentences(response_text):
@@ -992,7 +1153,8 @@ def _detect_claim_contradictions(
             stored_triples = _triples_for_subject(canon)
             matching_same_key = [
                 t for t in stored_triples
-                if t[1] == key and _subjects_equivalent(t[0], canon)
+                if t[1] == key and _subjects_equivalent(t[0], canon,
+                                                        user_aliases=effective_aliases)
             ]
             if not matching_same_key:
                 continue  # no stored fact on this predicate → inference OK
@@ -1057,7 +1219,7 @@ def verify_response(
 
     # ── Relationship-word check ──────────────────────────────────────────────
     # If the response asserts something concrete about a relationship the
-    # user does not have (e.g. "Jamie's daughter is named Sarah"), flag it.
+    # user does not have, flag it.
     user_rels = _user_relationships(store)
     rl = response_text.lower()
     # Expand the store's relationship-key set so that generic terms

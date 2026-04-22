@@ -1670,7 +1670,7 @@ _PREFIX_STRIP = ("the user's ", "user's ", "the user ", "user ")
 
 def _strip_user_prefix(s: str, owner_names: list[str] | tuple[str, ...] | None = None) -> str:
     """Normalise a fact's subject: lowercase, strip trailing punctuation,
-    and remove a leading 'User' / 'Jamie Rivera' / etc. marker.
+    and remove a leading User / profile-owner-name / etc. marker.
 
     ``owner_names`` is an optional iterable of canonical names and
     aliases for the profile owner. Pass None (or empty) to match only
@@ -2404,8 +2404,22 @@ class MemoryWriter:
             "son", "daughter", "child", "cousin", "friend",
             "best friend", "boss", "colleague", "coworker",
         }
+        # Build alias set from the owner config (already stored in self._owner_name
+        # and self._owner_aliases). Always include 'user' as the canonical anchor.
+        _owner_aliases_lower = {"user"}
+        if self._owner_name:
+            _owner_aliases_lower.add(self._owner_name.lower())
+            parts = self._owner_name.lower().split()
+            if parts:
+                _owner_aliases_lower.add(parts[0])
+        for _a in self._owner_aliases:
+            a_l = (_a or "").strip().lower()
+            if a_l:
+                _owner_aliases_lower.add(a_l)
+        _placeholders = ",".join("?" for _ in _owner_aliases_lower)
         user_row = self._store._conn.execute(
-            "SELECT id FROM entities WHERE LOWER(name) IN ('user','jamie') LIMIT 1"
+            f"SELECT id FROM entities WHERE LOWER(name) IN ({_placeholders}) LIMIT 1",
+            tuple(_owner_aliases_lower),
         ).fetchone()
         if not user_row:
             return

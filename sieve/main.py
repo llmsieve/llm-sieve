@@ -933,7 +933,12 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             text = extract_response_text(body, api_format)
             if not text:
                 return response
-            v = verify_response_v3(text, memory_store)
+            from sieve.verification import _owner_alias_set
+            v = verify_response_v3(
+                text,
+                memory_store,
+                owner_aliases=_owner_alias_set(config.profile_owner),
+            )
             if v.is_clean:
                 return response
             logger.info(
@@ -1257,6 +1262,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 absence_signals = build_absence_signals(
                     user_text, facts, memory_store,
                     recent_turns=recent_turns,
+                    profile_owner=config.profile_owner,
                 )
                 if absence_signals:
                     extra = "\n".join(s.text for s in absence_signals)

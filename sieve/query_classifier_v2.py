@@ -67,7 +67,7 @@ _SLOT_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bwhere does .* work\b", re.I), "employer"),
     (re.compile(r"\bwho does .* work for\b", re.I), "employer"),
     (re.compile(r"\bcurrent employer\b", re.I), "employer"),
-    (re.compile(r"\bmary'?s (?:current )?(?:employer|company)\b", re.I), "employer"),
+    (re.compile(r"\b\w+'?s (?:current )?(?:employer|company)\b", re.I), "employer"),
     # Residence
     (re.compile(r"\bwhere does .* live\b", re.I), "residence_city"),
     (re.compile(r"\bwhere .* lives\b", re.I), "residence_city"),
@@ -98,7 +98,7 @@ _MULTI_HOP_PATTERNS = [
     r"\bwho could (?:help|support|advise)\b",
     r"\bprofessional network\b",
     r"\bwhat .* given .* (?:situation|circumstances|financial)\b",
-    r"\bgiven (?:her|his|their|jamie'?s) current\b",
+    r"\bgiven (?:her|his|their|\w+'?s) current\b",
     r"\bwhat .* work (?:for|with)\b.*\b(?:given|considering)\b",
     r"\breasonably (?:commute|afford|manage)\b",
     r"\bshould .* consider\b",

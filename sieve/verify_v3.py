@@ -96,6 +96,7 @@ class V3Verification:
 def extract_attribute_contradictions(
     response_text: str,
     store: Any,
+    owner_aliases: "frozenset[str] | None" = None,
 ) -> list[V3FlaggedAttribute]:
     """Extractor 1: attribute contradictions on known entities.
 
@@ -104,12 +105,15 @@ def extract_attribute_contradictions(
     store-triple matching), then projects each FlaggedClaim back onto a
     sentence index by walking the sentence list and finding the first
     unclaimed sentence that matches the claim's source text.
+
+    ``owner_aliases`` is the lowercased set of names/aliases for the profile
+    owner, threaded through to the claim detector and store-triple extractor.
     """
     if not response_text:
         return []
     sentences = _split_sentences(response_text)
     flagged_claims: list[FlaggedClaim] = _detect_claim_contradictions(
-        response_text, store
+        response_text, store, owner_aliases=owner_aliases
     )
     if not flagged_claims:
         return []
@@ -123,7 +127,7 @@ def extract_attribute_contradictions(
         # Example" (captured without the suffix). If the claimed value
         # is a substring of any fact mentioning the subject, treat it as
         # agreement, not contradiction.
-        if _claim_matches_any_stored_fact(claim, store):
+        if _claim_matches_any_stored_fact(claim, store, owner_aliases=owner_aliases):
             continue
         idx = _find_sentence_index(claim.sentence, sentences, used_indices)
         if idx is None:
@@ -147,7 +151,11 @@ def extract_attribute_contradictions(
     return out
 
 
-def _claim_matches_any_stored_fact(claim: FlaggedClaim, store: Any) -> bool:
+def _claim_matches_any_stored_fact(
+    claim: FlaggedClaim,
+    store: Any,
+    owner_aliases: "frozenset[str] | None" = None,
+) -> bool:
     """Substring-aware veto for exact-match false positives.
 
     The attribute-correction detector compares `claimed == stored_object`
@@ -155,12 +163,22 @@ def _claim_matches_any_stored_fact(claim: FlaggedClaim, store: Any) -> bool:
     different surface forms ("Example Corp" vs "Example"). If `claimed`
     is a substring of any current fact mentioning the subject, or vice
     versa, treat the claim as consistent with the store.
+
+    ``owner_aliases`` is the lowercased set of names/aliases that refer to the
+    profile owner. When the claim subject is an owner alias, user facts are
+    also pulled (the 'user' entity stores the authoritative values).
     """
+    from sieve.verification import _extract_store_triples
     if store is None or getattr(store, "_conn", None) is None:
         return False
     lookup = "user" if claim.subject == "the_user" else claim.subject
     facts = _fetch_entity_facts(lookup, store)
-    if lookup.lower() == "jamie":
+    # Also pull user-entity facts when the claim is about an owner alias
+    # (e.g. "taylor" → also look up "user" entity facts).
+    lookup_l = lookup.lower()
+    _base = frozenset({"user", "the_user", "theuser", "the user"})
+    _effective = owner_aliases if owner_aliases is not None else _base
+    if lookup_l in _effective and lookup_l not in _base:
         facts = facts + _fetch_entity_facts("user", store)
     claimed_l = (claim.claimed or "").strip().lower()
     if not claimed_l:
@@ -176,8 +194,7 @@ def _claim_matches_any_stored_fact(claim: FlaggedClaim, store: Any) -> bool:
             # Also require the fact to be predicate-relevant, not just
             # mentioning any token. Narrow by asking the store pattern
             # to produce at least one matching predicate triple.
-            from sieve.verification import _extract_store_triples
-            for subj_h, key, obj in _extract_store_triples(content):
+            for subj_h, key, obj in _extract_store_triples(content, owner_aliases):
                 if key != claim.predicate:
                     continue
                 if any(t in obj.lower() for t in tokens):
@@ -346,6 +363,7 @@ _ACTIVE_FAB_RX = re.compile(
 def extract_fabricated_relationships(
     response_text: str,
     store: Any,
+    owner_aliases: "frozenset[str] | None" = None,
 ) -> list[V3FabricatedRelationship]:
     """Extractor 2: unknown proper nouns bound to known entities.
 
@@ -353,20 +371,30 @@ def extract_fabricated_relationships(
     to any known entity are NO DATA (pass through, not flagged). We only
     flag fabrications that claim a relationship to a known entity or the
     user.
+
+    ``owner_aliases`` is the lowercased set of names/aliases that refer to the
+    profile owner. When provided, any anchor that matches an owner alias is
+    treated as a user-anchored relationship check.
     """
     if not response_text or store is None:
         return []
     sentences = _split_sentences(response_text)
-    user_rels = _user_relationships(store)
+    user_rels = _user_relationships(store, owner_aliases=owner_aliases)
     out: list[V3FabricatedRelationship] = []
+
+    # Effective user-alias set: always include generic anchors.
+    _effective_aliases: frozenset[str] = (
+        owner_aliases
+        if owner_aliases is not None
+        else frozenset({"user", "the_user", "theuser", "the user"})
+    )
 
     def _relationship_exists(anchor: str, rel: str) -> bool:
         """Does the store have a relationship of type `rel` anchored on `anchor`?"""
         rel_l = rel.lower()
         anchor_l = anchor.lower()
-        # Canonicalise the anchor: Jamie / the user / user all map together.
-        user_aliases = {"jamie", "jamie rivera", "user", "the_user"}
-        is_user_anchor = anchor_l in user_aliases
+        # Canonicalise the anchor against the effective owner alias set.
+        is_user_anchor = anchor_l in _effective_aliases
         # Check against user_rels directly for user-anchored relationships.
         if is_user_anchor and rel_l in user_rels and user_rels[rel_l]:
             return True
@@ -473,17 +501,26 @@ def extract_fabricated_relationships(
 def verify_response_v3(
     response_text: str,
     store: Any,
+    owner_aliases: "frozenset[str] | None" = None,
 ) -> V3Verification:
     """Run both extractors on the response and return a structured verdict.
 
     Pure-Python, deterministic, <5ms on clean responses. No LLM calls.
+
+    ``owner_aliases`` is the lowercased set of names/aliases for the profile
+    owner, threaded through to both extractors so they resolve the correct
+    User entity regardless of the owner's name.
     """
     sentences = _split_sentences(response_text or "")
     if not response_text or len(response_text.strip()) < 5:
         return V3Verification(is_clean=True, sentences=sentences)
 
-    attributes = extract_attribute_contradictions(response_text, store)
-    fabricated = extract_fabricated_relationships(response_text, store)
+    attributes = extract_attribute_contradictions(
+        response_text, store, owner_aliases=owner_aliases
+    )
+    fabricated = extract_fabricated_relationships(
+        response_text, store, owner_aliases=owner_aliases
+    )
 
     is_clean = not attributes and not fabricated
     return V3Verification(

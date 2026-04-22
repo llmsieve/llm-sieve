@@ -97,7 +97,16 @@ class TestExtractQueryProperNouns:
         assert "Tell" not in nouns
 
     def test_skips_user_self(self):
-        nouns = _extract_query_proper_nouns("Where does Jamie live?")
+        # The owner's name must be supplied as extra_noise; no longer hardcoded.
+        from sieve.config import ProfileOwnerConfig
+        from sieve.verification import _owner_alias_set
+        owner = ProfileOwnerConfig(name="Jamie Rivera", aliases=["Jamie"])
+        noise = frozenset(
+            a.title() for a in _owner_alias_set(owner) if a
+        ) | frozenset(
+            a.capitalize() for a in _owner_alias_set(owner) if a
+        )
+        nouns = _extract_query_proper_nouns("Where does Jamie live?", extra_noise=noise)
         assert "Jamie" not in nouns
 
 
