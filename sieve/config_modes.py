@@ -45,11 +45,15 @@ class ProductionKeyViolation(Exception):
 
 
 def current_mode() -> Mode:
-    """Return the active mode, read once from the SIEVE_MODE env var.
+    """Return the active mode, reading SIEVE_MODE on every call.
 
-    Production is the default. 'test' (case-insensitive) selects test
-    mode. Any other value raises ValueError so misconfiguration is
-    loud instead of silently downgraded to production.
+    Production is the default (when unset or empty). 'test' (case-
+    insensitive) selects test mode. Any other value raises ValueError
+    so misconfiguration is loud instead of silently downgraded.
+
+    Note: the env var is NOT cached — each call re-reads. This is
+    intentional for test-time monkeypatch flipping. Long-running daemons
+    that want stable mode should capture `current_mode()` once at startup.
     """
     raw = os.environ.get("SIEVE_MODE", "").strip().lower() or "production"
     try:
@@ -101,7 +105,10 @@ def load_config_for_mode(
         yaml_path: primary YAML (sieve.yaml). Optional; missing = empty.
         test_yaml_path: overlay YAML (sieve.test.yaml). Only read when
             mode is TEST. Optional; missing = base YAML only.
-        mode: override the env-based mode. Omit in production use.
+        mode: override the env-based mode. Only used by tests —
+            production callers should omit this kwarg so the SIEVE_MODE
+            env var remains the single source of truth. Passing
+            `Mode.TEST` explicitly bypasses the env-var gate.
 
     Returns:
         A merged raw dict suitable for `sieve.config._build_config`.
