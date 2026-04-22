@@ -135,6 +135,12 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     if config is None:
         config = RecallConfig.load()
 
+    # Log production-key drift vs dataclass defaults. Audit-trail only,
+    # not a warning — grep for CONFIG_DRIFT in startup logs to see every
+    # key where the effective config diverges from shipping defaults.
+    from sieve.config_modes import log_config_drift  # noqa: PLC0415
+    log_config_drift(config)
+
     proxy_client = ProxyClient(config.provider.base_url)
     embedding_client = EmbeddingClient(config)
     # Optional cross-encoder reranker. Loaded during lifespan startup

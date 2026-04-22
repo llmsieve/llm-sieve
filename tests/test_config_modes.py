@@ -141,3 +141,55 @@ def test_test_mode_no_test_yaml_still_works(tmp_path, monkeypatch):
         test_yaml_path=tmp_path / "nonexistent_test.yaml",
     )
     assert raw == {"writer": {"model": "qwen3:14b"}}
+
+
+def test_log_config_drift_logs_known_override(caplog):
+    """A production-key override vs dataclass default emits CONFIG_DRIFT."""
+    from sieve.config import RecallConfig
+    from sieve.config_modes import log_config_drift
+    import logging
+
+    config = RecallConfig()
+    config.writer.model = "qwen3.5:4b"  # dataclass default — should NOT drift
+    config.provider.default_model = "llama3.2:3b"  # override — should drift
+
+    with caplog.at_level(logging.INFO, logger="recall.config_modes"):
+        count = log_config_drift(config)
+
+    assert count >= 1
+    drift_lines = [r.message for r in caplog.records if "CONFIG_DRIFT" in r.message]
+    assert any("provider.default_model" in line for line in drift_lines)
+    assert any("llama3.2:3b" in line for line in drift_lines)
+
+
+def test_log_config_drift_silent_on_defaults(caplog):
+    """A config matching dataclass defaults emits zero drift lines."""
+    from sieve.config import RecallConfig
+    from sieve.config_modes import log_config_drift
+    import logging
+
+    config = RecallConfig()  # pure defaults
+
+    with caplog.at_level(logging.INFO, logger="recall.config_modes"):
+        count = log_config_drift(config)
+
+    drift_lines = [r.message for r in caplog.records if "CONFIG_DRIFT" in r.message]
+    assert count == 0, f"expected 0 drift lines on defaults, got: {drift_lines}"
+
+
+def test_log_config_drift_allowlist_suppresses_host_specific(caplog):
+    """Allowlisted keys (store.path, security.auth_token) don't produce drift."""
+    from sieve.config import RecallConfig
+    from sieve.config_modes import log_config_drift
+    import logging
+
+    config = RecallConfig()
+    config.store.path = "/tmp/custom-path.db"  # host-specific, allowlisted
+    config.security.auth_token = "some-random-token"  # per-install, allowlisted
+
+    with caplog.at_level(logging.INFO, logger="recall.config_modes"):
+        count = log_config_drift(config)
+
+    drift_lines = [r.message for r in caplog.records if "CONFIG_DRIFT" in r.message]
+    assert not any("store.path" in line for line in drift_lines)
+    assert not any("security.auth_token" in line for line in drift_lines)

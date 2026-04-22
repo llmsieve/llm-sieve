@@ -158,3 +158,59 @@ def load_config_for_mode(
             )
 
     return raw
+
+
+# Production keys whose per-install variance is legitimate — never flagged
+# as drift even when they differ from dataclass defaults. Extend sparingly:
+# every addition hides potentially-useful diagnostic info.
+_DRIFT_ALLOWLIST: frozenset[str] = frozenset({
+    "store.path",              # host-specific; expected to differ
+    "security.auth_token",     # per-install random; always differs
+    "security.allowed_origins",  # site-specific CORS; expected to differ
+})
+
+
+def log_config_drift(config: Any, fresh_config: Any = None) -> int:
+    """Emit one INFO log line per production-key override vs dataclass defaults.
+
+    Compares the provided RecallConfig to a fresh instance (pure defaults).
+    For every key whose value differs AND is in the production surface AND
+    is not in the allowlist, logs:
+
+        CONFIG_DRIFT key=<dotted.path> user=<val> shipping=<val>
+
+    Not a warning or error — audit-trail visibility only. Users see these
+    once at sieve start; grep-able in support cases.
+
+    Returns the number of drift lines emitted (for tests + callers that
+    want to surface a startup summary).
+    """
+    from sieve.config import RecallConfig  # noqa: PLC0415 — avoid circular import
+    from sieve.config_surfaces import PRODUCTION_KEYS  # noqa: PLC0415
+
+    if fresh_config is None:
+        fresh_config = RecallConfig()
+
+    drift_count = 0
+    for dotted_key in sorted(PRODUCTION_KEYS):
+        if dotted_key in _DRIFT_ALLOWLIST:
+            continue
+        user_val = _get_dotted(config, dotted_key)
+        ship_val = _get_dotted(fresh_config, dotted_key)
+        if user_val != ship_val:
+            logger.info(
+                "CONFIG_DRIFT key=%s user=%r shipping=%r",
+                dotted_key, user_val, ship_val,
+            )
+            drift_count += 1
+    return drift_count
+
+
+def _get_dotted(obj: Any, dotted_key: str) -> Any:
+    """Resolve a dotted-path attribute on a nested dataclass. Missing → None."""
+    cur: Any = obj
+    for part in dotted_key.split("."):
+        if cur is None:
+            return None
+        cur = getattr(cur, part, None)
+    return cur
