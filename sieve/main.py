@@ -138,8 +138,13 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     # Log production-key drift vs dataclass defaults. Audit-trail only,
     # not a warning — grep for CONFIG_DRIFT in startup logs to see every
     # key where the effective config diverges from shipping defaults.
+    # Wrapped so a schema regression can't make sieve unbootable: this
+    # is diagnostic, it must never fail create_app.
     from sieve.config_modes import log_config_drift  # noqa: PLC0415
-    log_config_drift(config)
+    try:
+        log_config_drift(config)
+    except Exception as exc:  # noqa: BLE001 — defensive, diagnostic-only
+        logger.warning("CONFIG_DRIFT check failed (non-fatal): %s", exc)
 
     proxy_client = ProxyClient(config.provider.base_url)
     embedding_client = EmbeddingClient(config)
