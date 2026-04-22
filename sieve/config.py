@@ -314,23 +314,60 @@ class RecallConfig:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> RecallConfig:
-        """Load config from YAML file. Falls back to defaults if no file found."""
-        raw = {}
+        """Load config from YAML file. Falls back to defaults if no file found.
 
+        When *path* is supplied (CLI editing paths, sandbox, etc.) the raw
+        YAML is loaded directly — mode enforcement is not applied, matching
+        the pre-existing behaviour for those call sites.
+
+        When *path* is ``None`` (daemon-start path: ``sieve start``, or
+        ``SIEVE_CONFIG`` env-var override), the load goes through
+        :func:`sieve.config_modes.load_config_for_mode` so that:
+
+        - In production mode (default), only production-surface keys are
+          accepted; any advanced-only key causes startup to fail with a
+          clear message pointing at ``SIEVE_MODE=test`` as the escape hatch.
+        - In ``SIEVE_MODE=test``, a sibling ``sieve.test.yaml`` overlay is
+          merged in and the full advanced surface is accepted.
+        """
         if path is not None:
+            # Explicit-path callers (CLI editing, sandbox) — legacy behaviour.
             raw = _read_yaml(Path(path))
-        else:
-            # Check env var first
-            env_path = os.environ.get("SIEVE_CONFIG")
-            if env_path:
-                raw = _read_yaml(Path(env_path))
-            else:
-                for candidate in DEFAULT_CONFIG_PATHS:
-                    resolved = candidate.expanduser()
-                    if resolved.exists():
-                        raw = _read_yaml(resolved)
-                        break
+            return _build_config(raw)
 
+        # Daemon-start path: route through the mode-aware loader.
+        # Local import avoids a circular dependency:
+        #   sieve.config_modes -> sieve.config_surfaces -> sieve.cli_config
+        #   -> sieve.config (RecallConfig)
+        from sieve.config_modes import load_config_for_mode  # noqa: PLC0415
+
+        # Primary yaml: explicit SIEVE_CONFIG env wins; else first matching
+        # default path.
+        env_path = os.environ.get("SIEVE_CONFIG")
+        if env_path:
+            yaml_path: Path | None = Path(env_path)
+        else:
+            yaml_path = None
+            for candidate in DEFAULT_CONFIG_PATHS:
+                resolved = candidate.expanduser()
+                if resolved.exists():
+                    yaml_path = resolved
+                    break
+
+        # Overlay (only consumed when SIEVE_MODE=test):
+        test_path_env = os.environ.get("SIEVE_TEST_CONFIG")
+        if test_path_env:
+            test_yaml_path: Path | None = Path(test_path_env)
+        elif yaml_path is not None:
+            # Default: sibling of the primary YAML (e.g. ~/.sieve/sieve.test.yaml)
+            test_yaml_path = yaml_path.with_name("sieve.test.yaml")
+        else:
+            test_yaml_path = Path("~/.sieve/sieve.test.yaml").expanduser()
+
+        raw = load_config_for_mode(
+            yaml_path=yaml_path,
+            test_yaml_path=test_yaml_path,
+        )
         return _build_config(raw)
 
 
