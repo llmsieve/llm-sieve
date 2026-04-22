@@ -397,6 +397,7 @@ def _build_config(raw: dict) -> RecallConfig:
         max_rounds=int(pipeline_raw.get("max_rounds", 5)),
         core_facts_size=int(pipeline_raw.get("core_facts_size", 30)),
         max_outbound_tokens=int(pipeline_raw.get("max_outbound_tokens", 8000)),
+        upstream_ctx_default=int(pipeline_raw.get("upstream_ctx_default", 8192)),
         think_enabled=bool(pipeline_raw.get("think_enabled", False)),
         context_format=str(pipeline_raw.get("context_format", "auto")),
         pre_populate_top_k=int(pipeline_raw.get("pre_populate_top_k", 5)),
@@ -412,6 +413,7 @@ def _build_config(raw: dict) -> RecallConfig:
     writer = WriterConfig(
         model=writer_raw.get("model", "auto"),
         fallback_model=writer_raw.get("fallback_model", "auto"),
+        num_ctx=int(writer_raw.get("num_ctx", 4096)),
         ghost_validator_enabled=bool(writer_raw.get("ghost_validator_enabled", True)),
     )
 
