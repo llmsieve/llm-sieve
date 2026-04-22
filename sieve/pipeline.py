@@ -385,7 +385,11 @@ def compose_lean_payload(
     # and answer → `content`, and downstream readers see clean content.
 
     # 5. Apply token budget (progressive trim if over max_outbound_tokens)
-    _apply_token_budget(lean, config.max_outbound_tokens)
+    upstream_ctx = (
+        (original_payload.get("options") or {}).get("num_ctx")
+        or config.upstream_ctx_default
+    )
+    _apply_token_budget(lean, config.resolve_budget(upstream_ctx))
 
     # Log the reduction
     input_tokens = decomposed.total_tokens
@@ -476,5 +480,9 @@ async def compose_with_tool_selection(
     # (the common case), but it catches scenarios where a classifier for some
     # reason returns more tokens than the raw agent tools (shouldn't happen,
     # but cheap to guard).
-    _apply_token_budget(lean, config.max_outbound_tokens)
+    upstream_ctx = (
+        (original_payload.get("options") or {}).get("num_ctx")
+        or config.upstream_ctx_default
+    )
+    _apply_token_budget(lean, config.resolve_budget(upstream_ctx))
     return lean

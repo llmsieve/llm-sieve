@@ -65,7 +65,12 @@ class PipelineConfig:
     conversation_turns: int = 3
     max_rounds: int = 5
     core_facts_size: int = 30
-    max_outbound_tokens: int = 8000  # hard cap on composed lean payload
+    # Legacy default — the 8000 cap is a holdover from ~4K-context models.
+    # Modern upstream models (qwen3:14b = 40K native, qwen3.6:35b = 131K)
+    # can safely accept 2-4x this. `resolve_budget` below applies
+    # upstream-aware scaling when `max_outbound_tokens` is at the
+    # conservative default; explicit YAML overrides are honoured as-is.
+    max_outbound_tokens: int = 8000
     think_enabled: bool = False      # reserved for user-controllable <#think_on#>/<#think_off#> tags; pipeline does not inject a `think` flag (see pipeline.py)
     context_format: str = "auto"  # "flat" | "structured" | "auto" (auto dispatches structured for temporal queries, flat otherwise)
     # Facts surfaced into the lean payload BEFORE any tool call. Smaller
@@ -75,6 +80,34 @@ class PipelineConfig:
     # showed 15 retrieved facts injected ~230 tokens/query, most
     # irrelevant to the specific query.
     pre_populate_top_k: int = 5
+    # Fallback upstream native-ctx used when the inbound payload does not
+    # specify `options.num_ctx`. 8192 is a conservative baseline — on
+    # most modern upstream models the actual num_ctx will be much larger.
+    upstream_ctx_default: int = 8192
+
+    # Scaling constants — class-level for test overridability.
+    _BUDGET_FLOOR: int = 4000
+    _BUDGET_CEILING: int = 32768
+    _SCALE_THRESHOLD: int = 16384  # only scale up when upstream_ctx > this
+
+    def resolve_budget(self, upstream_ctx: int) -> int:
+        """Return the effective outbound token budget.
+
+        If the dataclass default (8000) is in effect AND the upstream
+        model's native ctx is large enough to benefit from scaling,
+        return min(upstream_ctx // 2, _BUDGET_CEILING). Otherwise honour
+        the explicit setting as-is. The floor (_BUDGET_FLOOR) only
+        applies in the default-scaling path to guard against degenerate
+        tiny-ctx models; explicit YAML/programmatic overrides are
+        honoured exactly.
+        """
+        explicit = self.max_outbound_tokens
+        if explicit != 8000:
+            # User-set (YAML override or non-default) — honour exactly.
+            return explicit
+        if upstream_ctx > self._SCALE_THRESHOLD:
+            return min(upstream_ctx // 2, self._BUDGET_CEILING)
+        return max(explicit, self._BUDGET_FLOOR)
 
 
 @dataclass
