@@ -571,8 +571,7 @@ def _default_model_for(url: str, api_key: str | None) -> str:
 
     - Local / LAN Ollama: try /api/tags, take the first non-embedding.
     - OpenAI-compat: try /v1/models, same.
-    - Last resort: 'qwen3.5:9b' for local, 'gpt-4o-mini' for openai,
-      'claude-sonnet-4-6' for anthropic.
+    - Fail-fast if no models available (audit C#9).
     """
     try:
         from sieve._wizard_helpers import list_models
@@ -592,13 +591,11 @@ def _default_model_for(url: str, api_key: str | None) -> str:
     for m in models:
         if _is_chat(m):
             return m
-    # Fallbacks.
-    low = url.lower()
-    if "anthropic" in low:
-        return "claude-sonnet-4-6"
-    if "openai" in low:
-        return "gpt-4o-mini"
-    return "qwen3.5:9b"
+    # Fail-fast if no models available (audit C#9).
+    raise RuntimeError(
+        f"No models available at {url}. "
+        f"Please pull a model first (e.g. `ollama pull qwen3:14b`) and retry `sieve init`."
+    )
 
 
 # ── Step 3: autostart ────────────────────────────────────────────────

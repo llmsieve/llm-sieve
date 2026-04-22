@@ -18,7 +18,7 @@ DEFAULT_CONFIG_PATHS = [
 
 @dataclass
 class ListenConfig:
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"   # was 0.0.0.0 — ship-safe default (audit C#8)
     port: int = 11435
 
 
@@ -345,7 +345,7 @@ def _build_config(raw: dict) -> RecallConfig:
     store_raw = raw.get("store", {})
 
     listen = ListenConfig(
-        host=listen_raw.get("host", "0.0.0.0"),
+        host=listen_raw.get("host", "127.0.0.1"),  # ship-safe default (audit C#8)
         port=int(listen_raw.get("port", 11435)),
     )
 

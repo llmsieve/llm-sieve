@@ -1359,7 +1359,7 @@ store:
     help=(
         "Run against the user's main proxy and store instead of an "
         "ephemeral sandbox. Advanced/debug use only — a demo run adds "
-        "Casey/Mabel facts to the live store. Requires `sieve start`."
+        "demo facts to the live store. Requires `sieve start`."
     ),
 )
 def demo(wait_for_write: bool, max_wait: float, use_main_store: bool):
@@ -1502,10 +1502,10 @@ def _run_demo_loop(
 
     messages = [
         "Hi, I'm Casey. I work as a landscape architect.",
-        "My favourite project so far is the riverside park in Bristol.",
-        "I have a dog called Mabel, she's a border terrier.",
+        "I've completed several public parks and garden designs.",
+        "I have a dog who's a border terrier.",
         "Do you remember where I work?",
-        "What breed is Mabel?",
+        "What breed is my dog?",
         "Do you remember where Pat works?",  # absence-signal trap
     ]
     expect_new_fact = [True, True, True, False, False, False]

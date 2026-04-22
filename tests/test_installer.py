@@ -180,22 +180,27 @@ def test_is_already_installed_false_with_corrupt_yaml(tmp_path, monkeypatch):
 
 
 def test_default_model_for_openai_fallback(monkeypatch):
-    """When listing fails, cloud URLs get provider-appropriate fallback."""
+    """When listing fails (empty list), fail-fast with RuntimeError (audit C#9)."""
     from sieve import _wizard_helpers
     monkeypatch.setattr(_wizard_helpers, "list_models", lambda *a, **k: [])
-    assert _installer._default_model_for("https://api.openai.com/v1", "sk-x") == "gpt-4o-mini"
+    with pytest.raises(RuntimeError, match="No models available"):
+        _installer._default_model_for("https://api.openai.com/v1", "sk-x")
 
 
 def test_default_model_for_anthropic_fallback(monkeypatch):
+    """When listing fails (empty list), fail-fast with RuntimeError (audit C#9)."""
     from sieve import _wizard_helpers
     monkeypatch.setattr(_wizard_helpers, "list_models", lambda *a, **k: [])
-    assert _installer._default_model_for("https://api.anthropic.com/v1", "sk-x").startswith("claude")
+    with pytest.raises(RuntimeError, match="No models available"):
+        _installer._default_model_for("https://api.anthropic.com/v1", "sk-x")
 
 
 def test_default_model_for_local_fallback(monkeypatch):
+    """When listing fails (empty list), fail-fast with RuntimeError (audit C#9)."""
     from sieve import _wizard_helpers
     monkeypatch.setattr(_wizard_helpers, "list_models", lambda *a, **k: [])
-    assert _installer._default_model_for("http://127.0.0.1:11434", None) == "qwen3.5:9b"
+    with pytest.raises(RuntimeError, match="No models available"):
+        _installer._default_model_for("http://127.0.0.1:11434", None)
 
 
 def test_default_model_for_picks_first_chat_model(monkeypatch):
