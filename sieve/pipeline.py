@@ -186,13 +186,17 @@ def _count_lean_tokens(lean: dict) -> int:
 def _apply_token_budget(lean: dict, max_tokens: int) -> dict:
     """Progressively trim the lean payload until it fits within `max_tokens`.
 
-    Trim order (per spec):
+    Trim order:
         1. Reduce history to the last 1 turn (drop older user/assistant pairs).
+        2a. (new; audit fix #2) If the payload still exceeds budget AND a
+            tools array is present, aggressively compress it (via
+            sieve.tool_compression.compress_schema, mode=aggressive). If
+            that isn't enough, drop all tools.
         2. Halve the retrieved-context system message, repeatedly, until it
            either fits or is removed entirely.
-        3. If still over budget, emit a WARNING. The payload is returned as-is
-           in that case — we do not truncate the current user message or the
-           tools array, because doing so silently could break the request.
+        3. If still over budget, emit a WARNING. The payload is returned
+           as-is in that case — we do not truncate the current user
+           message.
 
     The lean dict is mutated in place (and also returned for convenience).
     No-op when `max_tokens <= 0` or the payload already fits.
@@ -236,6 +240,37 @@ def _apply_token_budget(lean: dict, max_tokens: int) -> dict:
             tokens = _count_lean_tokens(lean)
             if tokens <= max_tokens:
                 return lean
+
+    # --- Step 2a: compress tools array (aggressive → drop) ---
+    # In agent-scaffolded usage the tools array is often the dominant
+    # bloat (~10K tokens), and the retrieved-context block holds the
+    # user's actual facts — so try trimming tools before dropping facts.
+    # (Audit finding #2 from AUDIT_2026_04_22.md.)
+    tools = lean.get("tools")
+    if tools and tokens > max_tokens:
+        from sieve.tool_compression import compress_schema
+
+        # Try aggressive compression first (drop descriptions).
+        compressed = [compress_schema(t, mode="aggressive") for t in tools]
+        lean["tools"] = compressed
+        tokens = _count_lean_tokens(lean)
+        logger.info(
+            "Token budget: tools compressed aggressive (now %d tokens)",
+            tokens,
+        )
+        if tokens <= max_tokens:
+            return lean
+
+        # Still over budget — drop all tools (agent loses tool-calling
+        # capability this turn, but the user's facts are more important).
+        lean["tools"] = []
+        tokens = _count_lean_tokens(lean)
+        logger.info(
+            "Token budget: dropped all %d tools → %d tokens",
+            len(compressed), tokens,
+        )
+        if tokens <= max_tokens:
+            return lean
 
     # --- Step 2: halve retrieved-context message repeatedly ---
     if context_idx is not None:
