@@ -2,15 +2,20 @@
 
 Takes a free-text fact (a readable sentence the existing writer already
 produces well) and classifies it into structured tags — subject,
-predicate, object, category — using gemma4:e4b via Ollama native
-`/api/generate` with format=JSON schema.
+predicate, object, category — via Ollama native `/api/generate` with
+format=JSON schema.
 
-This module exists because forcing qwen3.5:2b/4b to produce structured
-slots AND readable content in one shot makes it hallucinate values to
-fill slots it doesn't understand. The fix is to separate concerns:
+This module exists because forcing a small writer model to produce
+structured slots AND readable content in one shot makes it hallucinate
+values to fill slots it doesn't understand. The fix is to separate
+concerns:
 
-- Tier 1 writer (qwen3.5:4b, existing) -> content column (readable sentence)
-- Tier 2 classifier (gemma4:e4b, this module) -> structured columns
+- Tier 1 writer -> content column (readable sentence)
+- Tier 2 classifier (this module) -> structured columns
+
+The classifier model is NOT hardcoded here; the caller must supply it
+via the ``model=`` kwarg (resolved from ``ablation.tier2_classifier_model``
+in config, defaulting to ``provider.default_model`` when set to 'auto').
 
 If classification fails, the fact is still stored with NULL structured
 columns. It remains searchable via vector similarity; it just does not
@@ -87,7 +92,7 @@ class FactClassification:
     object_literal: str | None
     category: str | None
     slot_key: str | None
-    extraction_method: str = "tier2_gemma4_e4b"
+    extraction_method: str = "tier2_llm_classifier"
 
     @property
     def is_populated(self) -> bool:
@@ -110,11 +115,15 @@ async def classify_fact_async(
     content: str,
     *,
     base_url: str = "http://127.0.0.1:11434",
-    model: str = "gemma4:e4b",
+    model: str,  # required — resolved by caller from ablation.tier2_classifier_model
     num_ctx: int = 4096,
     timeout: float = 30.0,
 ) -> FactClassification:
     """Classify a free-text fact into structured tags.
+
+    ``model`` is required; callers must resolve it from
+    ``config.ablation.tier2_classifier_model`` (treating 'auto' as
+    ``config.provider.default_model``).
 
     Returns a FactClassification; on any failure the fields are None
     (fact still gets written, just without slot indexing).

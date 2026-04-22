@@ -29,14 +29,16 @@ async def test_classify_fact_happy_path(httpx_mock: HTTPXMock) -> None:
         url="http://127.0.0.1:11434/api/generate",
         json=_ok_payload("Jamie Rivera", "employer", "Example Corp", "work"),
     )
-    result = await classify_fact_async("Jamie Rivera works at Example Corp")
+    result = await classify_fact_async(
+        "Jamie Rivera works at Example Corp", model="test-model"
+    )
     assert result.subject == "Jamie Rivera"
     assert result.predicate == "employer"
     assert result.object_literal == "Example Corp"
     assert result.category == "work"
     assert result.slot_key == "jamie_rivera:employer"
     assert result.is_populated
-    assert result.extraction_method == "tier2_gemma4_e4b"
+    assert result.extraction_method == "tier2_llm_classifier"
 
 
 @pytest.mark.asyncio
@@ -44,7 +46,7 @@ async def test_classify_fact_network_error_returns_null(
     httpx_mock: HTTPXMock,
 ) -> None:
     httpx_mock.add_exception(Exception("boom"))
-    result = await classify_fact_async("Anything")
+    result = await classify_fact_async("Anything", model="test-model")
     assert result == FactClassification(None, None, None, None, None)
     assert not result.is_populated
 
@@ -57,7 +59,7 @@ async def test_classify_fact_bad_json_returns_null(
         url="http://127.0.0.1:11434/api/generate",
         json={"response": "not json at all"},
     )
-    result = await classify_fact_async("Anything")
+    result = await classify_fact_async("Anything", model="test-model")
     assert result.predicate is None
     assert result.slot_key is None
 
@@ -75,7 +77,7 @@ async def test_classify_fact_rejects_out_of_set_values(
             "category": "invalid_cat",       # not in CATEGORIES
         })},
     )
-    result = await classify_fact_async("Jamie attended MIT")
+    result = await classify_fact_async("Jamie attended MIT", model="test-model")
     assert result.subject == "Jamie"
     # Out-of-set values must be wiped so we don't corrupt slot indexing.
     assert result.predicate is None
@@ -115,6 +117,6 @@ async def test_sync_wrapper_runs(httpx_mock: HTTPXMock) -> None:
         json=_ok_payload("Kim", "residence", "Waltham", "housing"),
     )
     # Just verify the async function returns an awaitable that resolves.
-    result = await classify_fact_async("Kim moved to Waltham")
+    result = await classify_fact_async("Kim moved to Waltham", model="test-model")
     assert result.predicate == "residence"
     assert result.slot_key == "kim:residence"

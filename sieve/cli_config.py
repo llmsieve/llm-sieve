@@ -89,6 +89,7 @@ _SETTABLE: dict[str, tuple[type, set | None]] = {
     "ablation.response_verification": (bool, None),
     "ablation.schema_v2": (bool, None),
     "ablation.tier2_classifier": (bool, None),
+    "ablation.tier2_classifier_model": (str, None),
     "ablation.extreme_summary": (bool, None),
 
     "profile_owner.name": (str, None),

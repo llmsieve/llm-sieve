@@ -1857,7 +1857,7 @@ class MemoryWriter:
         profile_owner_aliases: list[str] | None = None,
         ghost_validator_enabled: bool = True,
         tier2_classifier_enabled: bool = False,
-        tier2_classifier_model: str = "gemma4:e4b",
+        tier2_classifier_model: str = "auto",  # 'auto' -> writer_model (already resolved)
     ):
         """
         Args:
@@ -2095,17 +2095,22 @@ class MemoryWriter:
                     logger.warning("Embedding failed for '%s': %s", fact.content[:40], exc)
 
             # Tier 2 classification: feed the readable content string
-            # through gemma4:e4b to derive structured tags. Fail-open:
-            # on any classifier error we write the fact with NULL
+            # through the configured tier2 model to derive structured tags.
+            # Fail-open: on any classifier error we write the fact with NULL
             # structured columns.
             _v2_kwargs: dict[str, str | None] = {}
             if self._tier2_classifier_enabled:
                 try:
                     from sieve.fact_classifier_v2 import classify_fact_async
+                    tier2_model = (
+                        self._writer_model
+                        if self._tier2_classifier_model == "auto"
+                        else self._tier2_classifier_model
+                    )
                     tags = await classify_fact_async(
                         fact.content,
                         base_url=self._provider_base_url,
-                        model=self._tier2_classifier_model,
+                        model=tier2_model,
                     )
                     if tags.is_populated:
                         # Subject canonicalisation: if the owner's name

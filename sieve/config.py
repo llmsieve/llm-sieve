@@ -221,6 +221,7 @@ class AblationConfig:
     # [NARRATIVE SUMMARY] in the context block.
     tier2_classifier: bool = False         # ABL-T2C — LLM classifier (off by default)
     extreme_summary: bool = True           # ABL-XS — EXTREME summary (ships on)
+    tier2_classifier_model: str = "auto"  # 'auto' -> provider.default_model
 
 
 @dataclass
@@ -479,6 +480,7 @@ def _build_config(raw: dict) -> RecallConfig:
         schema_v2=bool(ablation_raw.get("schema_v2", ablation_defaults.schema_v2)),
         tier2_classifier=bool(ablation_raw.get("tier2_classifier", ablation_defaults.tier2_classifier)),
         extreme_summary=bool(ablation_raw.get("extreme_summary", ablation_defaults.extreme_summary)),
+        tier2_classifier_model=str(ablation_raw.get("tier2_classifier_model", ablation_defaults.tier2_classifier_model)),
     )
 
     progression_raw = raw.get("progression") or {}

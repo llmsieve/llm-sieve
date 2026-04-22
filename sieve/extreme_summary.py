@@ -70,12 +70,16 @@ async def summarise_async(
     stripped_text: str,
     *,
     base_url: str = "http://127.0.0.1:11434",
-    model: str = "qwen3.5:4b",
+    model: str,  # required — caller must resolve via resolve_writer_model(config)
     num_ctx: int = 32768,
     target_tokens: int = SUMMARY_TARGET_TOKENS,
     timeout: float = 120.0,
 ) -> str | None:
     """Produce a ~target_tokens narrative summary of stripped bloat.
+
+    ``model`` is required; callers should resolve it via
+    ``resolve_writer_model(config)`` so the user's configured model is used
+    rather than any hardcoded tag.
 
     Returns None on any failure — caller MUST fall back to no summary
     (never block the whole request on a summariser failure).

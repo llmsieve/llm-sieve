@@ -34,7 +34,7 @@ async def test_summarise_returns_text(httpx_mock: HTTPXMock) -> None:
         url="http://127.0.0.1:11434/api/generate",
         json={"response": "Jamie Rivera is a VP of Product at Example."},
     )
-    result = await summarise_async("a" * 50_000)
+    result = await summarise_async("a" * 50_000, model="test-model")
     assert result == "Jamie Rivera is a VP of Product at Example."
 
 
@@ -42,7 +42,7 @@ async def test_summarise_returns_text(httpx_mock: HTTPXMock) -> None:
 async def test_summarise_empty_input_returns_none(
     httpx_mock: HTTPXMock,
 ) -> None:
-    result = await summarise_async("   \n  ")
+    result = await summarise_async("   \n  ", model="test-model")
     assert result is None
 
 
@@ -51,7 +51,7 @@ async def test_summarise_network_failure_returns_none(
     httpx_mock: HTTPXMock,
 ) -> None:
     httpx_mock.add_exception(Exception("boom"))
-    result = await summarise_async("a" * 50_000)
+    result = await summarise_async("a" * 50_000, model="test-model")
     assert result is None
 
 
@@ -63,7 +63,7 @@ async def test_summarise_empty_response_returns_none(
         url="http://127.0.0.1:11434/api/generate",
         json={"response": "   "},
     )
-    result = await summarise_async("a" * 50_000)
+    result = await summarise_async("a" * 50_000, model="test-model")
     assert result is None
 
 

@@ -257,6 +257,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             profile_owner_aliases=config.profile_owner.aliases,
             ghost_validator_enabled=config.writer.ghost_validator_enabled,
             tier2_classifier_enabled=config.ablation.tier2_classifier,
+            tier2_classifier_model=config.ablation.tier2_classifier_model,
         )
         classifier = QueryClassifier(memory_store, embed_fn=embedding_client.embed)
         retriever = ContextRetriever(
@@ -1065,9 +1066,12 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                         parts.append(f"[{name}]\n{sec.content}")
                 stripped_text = "\n\n".join(parts)
                 if should_summarise(stripped_text, enabled=True):
+                    eff_model = resolve_writer_model(config)
                     summary = await summarise_async(
                         stripped_text,
                         base_url=config.provider.base_url,
+                        model=eff_model,
+                        num_ctx=min(config.writer.num_ctx, 32768),
                     )
                     if summary:
                         extreme_summary_text = format_summary_section(summary)
