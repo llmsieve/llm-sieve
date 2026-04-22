@@ -1071,6 +1071,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                         stripped_text,
                         base_url=config.provider.base_url,
                         model=eff_model,
+                        # Narrative summariser reuses writer.num_ctx (both are
+                        # post-retrieval context cleanup); capped at 32768 to
+                        # avoid excessive latency costs on cloud-model wide windows.
                         num_ctx=min(config.writer.num_ctx, 32768),
                     )
                     if summary:
