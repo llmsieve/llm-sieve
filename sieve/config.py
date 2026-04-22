@@ -139,11 +139,17 @@ class ProgressionConfig:
 
 @dataclass
 class WriterConfig:
-    # 'auto' routes S2 extraction to provider.default_model so the user's
-    # main model handles both inference and extraction. Override with an
-    # explicit model name if you prefer a separate writer (e.g. a
-    # CPU-pinned qwen3.5:2b for users who want to save GPU VRAM).
-    model: str = "auto"
+    # qwen3.5:4b default (changed 2026-04-22): validated on the
+    # cross-framework 20-msg fact-bearing smoke at recall=0.83 vs
+    # the 14B reference, 1.39x speedup, zero hallucinations. Rationale:
+    # S2 extraction is a short-in / short-out structured-JSON task that
+    # doesn't benefit from a large reasoning model; routing it through
+    # a small purpose-fit model cuts wallclock without degrading the
+    # fact store. Override with 'auto' (-> provider.default_model) if
+    # you prefer the main model, or set an explicit name.
+    # Validation artefacts: recall repo evaluation/personal_agent_phase/
+    # writer_validation_*.json .
+    model: str = "qwen3.5:4b"
     fallback_model: str = "auto"
     num_ctx: int = 4096
     ghost_validator_enabled: bool = True
@@ -449,7 +455,7 @@ def _build_config(raw: dict) -> RecallConfig:
 
     writer_raw = raw.get("writer", {})
     writer = WriterConfig(
-        model=writer_raw.get("model", "auto"),
+        model=writer_raw.get("model", "qwen3.5:4b"),
         fallback_model=writer_raw.get("fallback_model", "auto"),
         num_ctx=int(writer_raw.get("num_ctx", 4096)),
         ghost_validator_enabled=bool(writer_raw.get("ghost_validator_enabled", True)),
