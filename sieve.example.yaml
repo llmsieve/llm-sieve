@@ -67,10 +67,17 @@ profile_owner:
     - "user"
 
 writer:
-  # "auto" routes S2 fact extraction to provider.default_model so there's
-  # no separate writer model to load. Override with an explicit model
-  # name (e.g. "recall-writer-cpu") to keep the legacy CPU-pinned writer.
-  model: auto
+  # Shipping default: dedicated 4B writer (qwen3.5:4b) for S2 fact extraction.
+  # This matches WriterConfig.model's dataclass default. Validated on the
+  # cross-framework 20-msg smoke at recall=0.83 and on the 30-day
+  # sim sweep at accuracy parity (+0.017) vs qwen3:14b at -38% wallclock.
+  #
+  # Override options:
+  #   - "auto"  → routes S2 to provider.default_model (no separate model loaded;
+  #                 useful when upstream is a capable cloud model).
+  #   - any model tag → explicit override (e.g. "qwen3:14b" for max quality
+  #                 on hardware that can load both models).
+  model: qwen3.5:4b
   fallback_model: auto
   num_ctx: 4096
   ghost_validator_enabled: true
