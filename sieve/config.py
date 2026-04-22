@@ -6,6 +6,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 import yaml
 
@@ -85,10 +86,10 @@ class PipelineConfig:
     # most modern upstream models the actual num_ctx will be much larger.
     upstream_ctx_default: int = 8192
 
-    # Scaling constants — class-level for test overridability.
-    _BUDGET_FLOOR: int = 4000
-    _BUDGET_CEILING: int = 32768
-    _SCALE_THRESHOLD: int = 16384  # only scale up when upstream_ctx > this
+    # Scaling constants — true class-level (ClassVar), not dataclass fields.
+    _BUDGET_FLOOR: ClassVar[int] = 4000
+    _BUDGET_CEILING: ClassVar[int] = 32768
+    _SCALE_THRESHOLD: ClassVar[int] = 16384  # only scale up when upstream_ctx > this
 
     def resolve_budget(self, upstream_ctx: int) -> int:
         """Return the effective outbound token budget.
