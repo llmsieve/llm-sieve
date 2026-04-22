@@ -19,7 +19,21 @@ from __future__ import annotations
 from sieve.cli_config import _SETTABLE
 
 # Every key that ships to the user-visible CLI surface.
-PRODUCTION_KEYS: frozenset[str] = frozenset(_SETTABLE.keys())
+_CLI_SETTABLE_KEYS: frozenset[str] = frozenset(_SETTABLE.keys())
+
+# Keys that are valid in a production sieve.yaml but cannot be set via
+# `sieve config set` because they hold list or nested-dict values that
+# the CLI _coerce function cannot parse from a single string argument.
+# Accepted from YAML; rejected when someone tries to set them via CLI.
+PRODUCTION_YAML_ONLY_KEYS: frozenset[str] = frozenset({
+    "profile_owner.aliases",      # list[str] — populated by YAML or wizard
+    "security.allowed_origins",   # list[str] — CORS allowlist
+    "provider.options",           # dict — raw Ollama options block
+    "provider.options.think",     # nested dict leaf — think-mode flag
+})
+
+# Union: all keys accepted in production-mode YAML.
+PRODUCTION_KEYS: frozenset[str] = _CLI_SETTABLE_KEYS | PRODUCTION_YAML_ONLY_KEYS
 
 # Hidden-from-users but override-able when SIEVE_MODE=test.
 # Source: ship-hygiene audit (SHIP_HYGIENE_AUDIT_2026_04_22.md) Category A

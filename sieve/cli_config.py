@@ -84,6 +84,15 @@ _SETTABLE: dict[str, tuple[type, set | None]] = {
     "progression.accumulate_turns": (int, None),
     "progression.activate_turns": (int, None),
 
+    "ablation.fingerprinting": (bool, None),
+    "ablation.classifier": (bool, None),
+    "ablation.pre_populate": (bool, None),
+    "ablation.graph_traversal": (bool, None),
+    "ablation.temporal_versioning": (bool, None),
+    "ablation.learning_loop": (bool, None),
+    "ablation.coherence_integrity": (bool, None),
+    "ablation.stage2_writer": (bool, None),
+    "ablation.recall_tool": (bool, None),
     "ablation.absence_signal": (bool, None),
     "ablation.closed_world": (bool, None),
     "ablation.response_verification": (bool, None),
@@ -91,6 +100,12 @@ _SETTABLE: dict[str, tuple[type, set | None]] = {
     "ablation.tier2_classifier": (bool, None),
     "ablation.tier2_classifier_model": (str, None),
     "ablation.extreme_summary": (bool, None),
+
+    "pipeline.think_enabled": (bool, None),
+    "pipeline.upstream_ctx_default": (int, None),
+
+    "validation.enabled": (bool, None),
+    "validation.db_path": (str, None),
 
     "profile_owner.name": (str, None),
     "profile_owner.pin": (str, None),
