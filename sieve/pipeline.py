@@ -314,6 +314,8 @@ def compose_lean_payload(
     profile_owner_pin: str = "",
     pure_general: bool = False,
     progression: PhaseDecision | None = None,
+    *,
+    narrative_summary: str | None = None,
 ) -> dict:
     """Compose a lean payload from the decomposed original.
 
@@ -352,6 +354,12 @@ def compose_lean_payload(
     # because the pin exists to ground personal context, which by
     # definition is irrelevant here.
     base_prompt = GENERAL_LEAN_SYSTEM_PROMPT if pure_general else LEAN_SYSTEM_PROMPT
+    # Audit Fix #3 (AUDIT_2026_04_22.md): narrative summary lives in
+    # the lean system prompt so it survives _apply_token_budget — never
+    # trimmed. Previously appended into retrieved-context where trim
+    # could delete it along with the user's facts.
+    if narrative_summary:
+        base_prompt = base_prompt + "\n\n" + narrative_summary
     lean_system = base_prompt
     if not pure_general:
         pin = profile_owner_pin.strip()
@@ -462,6 +470,8 @@ async def compose_with_tool_selection(
     profile_owner_pin: str = "",
     pure_general: bool = False,
     progression: PhaseDecision | None = None,
+    *,
+    narrative_summary: str | None = None,
 ) -> dict:
     """Layer 2 wrapper: compose the lean payload, then filter tools via the classifier.
 
@@ -482,6 +492,7 @@ async def compose_with_tool_selection(
         profile_owner_pin=profile_owner_pin,
         pure_general=pure_general,
         progression=progression,
+        narrative_summary=narrative_summary,
     )
 
     try:

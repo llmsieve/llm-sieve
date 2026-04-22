@@ -985,9 +985,9 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     async def _retrieve_context(
         user_text: str,
         decomposed: Any = None,
-    ) -> tuple[str, list[dict], list, bool]:
+    ) -> tuple[str, list[dict], list, bool, str | None]:
         """Classify query; if context needed, retrieve and return
-        (block, facts, signals, is_pure_general).
+        (block, facts, signals, is_pure_general, narrative_summary).
 
         Args:
             user_text: current user query.
@@ -1002,23 +1002,26 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
 
         Returns:
             (context_block_text, retrieved_facts, absence_signals,
-             is_pure_general) — facts and signals are empty lists if no
-            retrieval happened. The text already includes Layer 1
-            absence signals and Layer 2 closed-world framing if those
-            flags are enabled; signals is returned separately so
-            validation telemetry can count accurately. is_pure_general
-            is True when the L0 classifier confidently said "no
-            retrieval" (pure general knowledge) — the caller uses this
-            to decide whether to keep injecting the recall tool.
+             is_pure_general, narrative_summary) — facts and signals are
+            empty lists if no retrieval happened. The text already includes
+            Layer 1 absence signals and Layer 2 closed-world framing if those
+            flags are enabled; signals is returned separately so validation
+            telemetry can count accurately. is_pure_general is True when the
+            L0 classifier confidently said "no retrieval" (pure general
+            knowledge) — the caller uses this to decide whether to keep
+            injecting the recall tool. narrative_summary (Audit Fix #3) is
+            the extreme_summary narrative string or None; the caller injects
+            it into the lean system prompt (never trimmed by
+            _apply_token_budget) rather than into the retrieved-context block.
         """
         # ABL-PP: skip pre-population entirely
         if not config.ablation.pre_populate:
             logger.info("ABL-PP: pre-population disabled")
-            return "", [], [], False
+            return "", [], [], False, None
         if classifier is None or retriever is None or not memory_store._conn:
-            return "", [], [], False
+            return "", [], [], False, None
         if not user_text.strip():
-            return "", [], [], False
+            return "", [], [], False, None
 
         # D4: meta-questions about Sieve's own state ("how many facts do
         # you know about me?", "what do you know about me?") — without
@@ -1040,7 +1043,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 f"you know, cite this number.\n"
             )
             logger.info("D4 meta-question injected: %d facts", fact_total)
-            return meta_block, [], [], False
+            return meta_block, [], [], False, None
 
         # EXTREME narrative summary — computed up-front so it
         # applies whether or not the classifier decides retrieval is
@@ -1220,7 +1223,12 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                                 fact_total,
                             )
                             is_pure_general = False
-                    return extreme_summary_text, [], [], is_pure_general
+                    # Audit Fix #3: return narrative as its own 5th element so
+                    # the caller can inject it into the lean system prompt
+                    # (never trimmed). Previously it was returned as the text
+                    # slot and would vanish if _apply_token_budget dropped the
+                    # retrieved-context message.
+                    return "", [], [], is_pure_general, extreme_summary_text or None
 
             assert ctx is not None  # all branches above either assign ctx or return
             text = ctx.text
@@ -1282,17 +1290,20 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                 text = text + CLOSED_WORLD_FRAMING
                 logger.info("ABL-CW: closed-world framing appended")
 
-            # EXTREME: append the pre-computed narrative summary (built
-            # before retrieval ran so it fires even on non-retrieval
-            # paths). Placed last so [CURRENT] slot facts still lead.
+            # Audit Fix #3: narrative summary is returned as its own 5th
+            # element so the caller injects it into the lean system prompt
+            # (messages[0]) — a location _apply_token_budget never trims.
+            # Previously it was appended into the retrieved-context block and
+            # would be halved or dropped by aggressive token budget trimming,
+            # causing the model to confabulate on trap queries like
+            # "When did I graduate from Oxford?" (OpenClaw 30-day run).
             if extreme_summary_text:
-                text = (text + "\n\n" + extreme_summary_text) if text else extreme_summary_text
-                logger.info("ABL-XS: appended narrative summary to context block")
+                logger.info("ABL-XS: narrative summary emitted separately (Audit Fix #3)")
 
-            return text, facts, absence_signals, False
+            return text, facts, absence_signals, False, extreme_summary_text or None
         except Exception as exc:
             logger.warning("Classify/retrieve failed: %s", exc)
-            return "", [], [], False
+            return "", [], [], False, None
 
     async def _maybe_ingest_tools(payload: dict, decomposed) -> None:
         if tool_registry is None:
@@ -1386,7 +1397,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             fp_cache = fingerprint_cache if config.ablation.fingerprinting else FingerprintCache(None)
             decomposed = decompose(payload, fp_cache, api_format="ollama")
             await _maybe_ingest_tools(payload, decomposed)
-            retrieved_context, retrieved_facts, absence_signals, is_pure_general = await _retrieve_context(user_text, decomposed)
+            retrieved_context, retrieved_facts, absence_signals, is_pure_general, narrative_summary = await _retrieve_context(user_text, decomposed)
             phase = _detect_current_phase()
             logger.info("Phase %s", phase.render_tag())
             if tool_classifier is not None and config.tools.enabled:
@@ -1398,6 +1409,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
                     progression=phase,
+                    narrative_summary=narrative_summary,
                 )
             else:
                 lean = compose_lean_payload(
@@ -1406,6 +1418,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
                     progression=phase,
+                    narrative_summary=narrative_summary,
                 )
             # ABL-RT: don't inject recall tool → strip it from lean
             if not config.ablation.recall_tool:
@@ -1484,7 +1497,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             fp_cache = fingerprint_cache if config.ablation.fingerprinting else FingerprintCache(None)
             decomposed = decompose(payload, fp_cache, api_format="openai")
             await _maybe_ingest_tools(payload, decomposed)
-            retrieved_context, retrieved_facts, absence_signals, is_pure_general = await _retrieve_context(user_text, decomposed)
+            retrieved_context, retrieved_facts, absence_signals, is_pure_general, narrative_summary = await _retrieve_context(user_text, decomposed)
             phase = _detect_current_phase()
             logger.info("Phase %s", phase.render_tag())
             if tool_classifier is not None and config.tools.enabled:
@@ -1496,6 +1509,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
                     progression=phase,
+                    narrative_summary=narrative_summary,
                 )
             else:
                 lean = compose_lean_payload(
@@ -1504,6 +1518,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
                     profile_owner_pin=config.profile_owner.pin,
                     pure_general=is_pure_general,
                     progression=phase,
+                    narrative_summary=narrative_summary,
                 )
             # ABL-RT: strip recall tool
             if not config.ablation.recall_tool:
