@@ -6,7 +6,7 @@ A single ``EventBus`` instance lives on the FastAPI app state when
 - A monotonic event counter (assigns ``event_id`` strings)
 - A ring buffer (last 200 events) for SSE Last-Event-ID reconnect-resume
 - A list of active subscribers (asyncio queues, one per connected SSE
-  client; usually exactly one — sieve-test connects once per run)
+  client; usually exactly one consumer per run)
 
 Pipeline call sites (main.py turn-handler) call ``bus.emit(...)`` after
 each turn / writer completion / phase transition. The bus enqueues to
@@ -14,8 +14,7 @@ all active subscribers and appends to the ring buffer. SSE consumers
 get a typed JSON line per event.
 
 CARDINAL RULE: no test logic in this module. It is plumbing for the
-protocol surface only. Scenarios, hypotheses, grading happen in
-sieve-test.
+protocol surface only. Scenarios, hypotheses, grading happen elsewhere.
 """
 from __future__ import annotations
 
@@ -230,7 +229,7 @@ class EventBus:
             elif event.event_id == last_event_id:
                 found = True
         if not found and self._buffer:
-            # Buffer overflow — sieve-test missed events between
+            # Buffer overflow — the consumer missed events between
             # last_event_id and the buffer's tail. Surface as in-band error.
             err = ErrorEvent(
                 schema_version=1,

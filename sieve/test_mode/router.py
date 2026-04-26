@@ -12,7 +12,7 @@ Mounted on the app ONLY when ``SIEVE_TEST_MODE=on``. Provides:
 
 CARDINAL RULE: this module touches Sieve runtime via narrow interfaces
 (state shared with main.py via ``app.state``). It does NOT contain test
-logic — that lives in sieve-test.
+logic — test logic lives in a separate internal harness.
 """
 from __future__ import annotations
 

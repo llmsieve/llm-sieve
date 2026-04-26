@@ -345,11 +345,10 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     fingerprint_cache = FingerprintCache(memory_store)
 
     # --- Test mode router (mounted ONLY when SIEVE_TEST_MODE=on) ---
-    # The test_mode submodule is the protocol surface that sieve-test (research
-    # harness, separate repo) drives. In production mode this router is not
-    # mounted and /test/* returns 404. The endpoints are governed by a stable
-    # versioned protocol; see sieve/test_mode/__init__.py and the schemas
-    # mirrored from sieve-test/sieve_test/protocol/{events,control}.py.
+    # The test_mode submodule is an internal protocol surface used for
+    # benchmark and evaluation work. In production mode this router is
+    # not mounted and /test/* returns 404. The endpoints are governed by
+    # a stable versioned protocol; see sieve/test_mode/__init__.py.
     from sieve.test_mode import is_test_mode_enabled
     if is_test_mode_enabled():
         from sieve.test_mode.router import build_router as _build_test_router

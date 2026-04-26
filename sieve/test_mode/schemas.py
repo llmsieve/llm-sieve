@@ -1,18 +1,14 @@
 """Pydantic schemas for test-mode protocol.
 
-MIRRORED from `sieve-test/sieve_test/protocol/{events,control}.py` at
-PROTOCOL_VERSION=1. If sieve-test bumps the version, sieve-side mirrors
-the change in lockstep. Schema drift is detected by sieve-test (which
-fails fast on Pydantic ValidationError); the Sieve runtime keeps
-working.
+These schemas define the wire contract for ``/test/control/*`` requests/
+responses and ``/test/events`` SSE payloads. The schemas are versioned
+(``PROTOCOL_VERSION``); breaking changes bump the major version. An
+internal test harness (separate repo) consumes these schemas and fails
+fast on Pydantic validation errors if drift occurs — the Sieve runtime
+keeps working regardless.
 
-Source of truth: https://github.com/azardhosein/sieve-test
-                 docs/specs/protocol-spec-v1.md
-
-CARDINAL RULE: never import from sieve-test (which is correct because
-sieve-test isn't installed on the production side anyway). The mirror
-lives here authoritatively for the runtime; sieve-test mirrors the
-mirror.
+CARDINAL RULE: this module defines the runtime side of the contract
+authoritatively. Internal test code must never be imported here.
 """
 from __future__ import annotations
 
