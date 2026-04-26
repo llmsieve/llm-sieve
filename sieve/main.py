@@ -337,7 +337,26 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     app.state.config = config
     app.state.proxy_client = proxy_client
     app.state.memory_store = memory_store
+    # Mirror config under sieve_config alias so the test-mode router (which
+    # uses generic attribute names) finds it. Keeps existing call sites working.
+    app.state.sieve_config = config
+    app.state.started_at = time.time()
+    app.state.active_run_uuid = None
     fingerprint_cache = FingerprintCache(memory_store)
+
+    # --- Test mode router (mounted ONLY when SIEVE_TEST_MODE=on) ---
+    # The test_mode submodule is the protocol surface that sieve-test (research
+    # harness, separate repo) drives. In production mode this router is not
+    # mounted and /test/* returns 404. The endpoints are governed by a stable
+    # versioned protocol; see sieve/test_mode/__init__.py and the schemas
+    # mirrored from sieve-test/sieve_test/protocol/{events,control}.py.
+    from sieve.test_mode import is_test_mode_enabled
+    if is_test_mode_enabled():
+        from sieve.test_mode.router import build_router as _build_test_router
+        from sieve.test_mode.event_bus import init_bus
+        init_bus()
+        app.include_router(_build_test_router())
+        logger.info("test_mode: mounted /test/* endpoints (SIEVE_TEST_MODE=on)")
 
     # Validation metrics collector (opt-in; zero overhead when disabled).
     validation_collector = ValidationCollector(

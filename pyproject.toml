@@ -26,6 +26,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "httpx>=0.28",
+    "sse-starlette>=2.1",
     "pyyaml>=6.0",
     "click>=8.1",
     "rich>=13.0",
