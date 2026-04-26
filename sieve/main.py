@@ -1398,6 +1398,100 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             fact_count = 0
         return detect_phase(fact_count, config.progression)
 
+    # Per-app phase tracking for phase_change events. Reset on app start.
+    _phase_tracker: dict[str, str] = {"last_phase": "OBSERVE"}
+    # Per-app turn counter (used as fallback turn_idx if request payload doesn't carry one).
+    _turn_counter: dict[str, int] = {"n": 0}
+
+    def _emit_test_mode_telemetry(
+        *, payload: dict, lean: dict, phase, t_start: float,
+        request_body: bytes, response_body_text: str,
+    ) -> None:
+        """Emit turn_complete + (optionally) phase_change to the test-mode bus.
+
+        No-op when SIEVE_TEST_MODE is off or the bus isn't initialised.
+        Defensive: any exception is logged + swallowed so test-mode never
+        breaks the production response path.
+
+        Component breakdown is approximate — we attribute lean tokens to:
+          - sys: first system message (lean system prompt)
+          - ctx: subsequent system messages (retrieved context blocks)
+          - hist: non-final user/assistant messages
+          - user: final user message
+          - tools: lean tools array
+        """
+        try:
+            from sieve.test_mode import is_test_mode_enabled
+            if not is_test_mode_enabled():
+                return
+            from sieve.test_mode.event_bus import get_bus
+            bus = get_bus()
+            if bus is None:
+                return
+
+            from sieve.validation_collector import _approx_tokens
+            import hashlib
+
+            messages = lean.get("messages", []) or []
+            sys_tok = ctx_tok = hist_tok = user_tok = 0
+            seen_first_system = False
+            last_user_idx = -1
+            for i, m in enumerate(messages):
+                if isinstance(m, dict) and m.get("role") == "user":
+                    last_user_idx = i
+            for i, m in enumerate(messages):
+                if not isinstance(m, dict):
+                    continue
+                role = m.get("role")
+                content = m.get("content", "") or ""
+                tok = _approx_tokens(content if isinstance(content, str) else json.dumps(content))
+                if role == "system":
+                    if not seen_first_system:
+                        sys_tok += tok
+                        seen_first_system = True
+                    else:
+                        ctx_tok += tok
+                elif role in ("user", "assistant"):
+                    if i == last_user_idx and role == "user":
+                        user_tok = tok
+                    else:
+                        hist_tok += tok
+            tools_tok = _approx_tokens(json.dumps(lean.get("tools", []) or []))
+
+            inbound_tokens = _payload_tokens(payload)
+            outbound_tokens = _payload_tokens(lean)
+            latency_ms = int((time.perf_counter() - t_start) * 1000)
+
+            req_hash = hashlib.sha256(request_body).hexdigest()
+            resp_hash = hashlib.sha256(response_body_text.encode("utf-8")).hexdigest()
+
+            _turn_counter["n"] += 1
+            turn_idx = min(_turn_counter["n"], 120)
+
+            bus.emit_turn_complete(
+                turn_idx=turn_idx,
+                sieve_inbound_tokens=inbound_tokens,
+                sieve_outbound_tokens=outbound_tokens,
+                sys=sys_tok, ctx=ctx_tok, hist=hist_tok, user=user_tok, tools=tools_tok,
+                latency_ms=latency_ms,
+                request_body_hash=req_hash,
+                response_body_hash=resp_hash,
+                phase_at_turn=phase.label,
+                facts_in_store_at_turn=phase.fact_count,
+            )
+
+            # Phase-change detection.
+            if _phase_tracker["last_phase"] != phase.label:
+                bus.emit_phase_change(
+                    from_phase=_phase_tracker["last_phase"],
+                    to_phase=phase.label,
+                    fact_count=phase.fact_count,
+                    turn_idx=turn_idx,
+                )
+                _phase_tracker["last_phase"] = phase.label
+        except Exception as exc:
+            logger.debug("test_mode telemetry emit failed (non-fatal): %s", exc)
+
     # --- Intercepted chat endpoints (Phase 4+5: strip + compose + write + forward) ---
 
     @app.post("/api/chat")
@@ -1497,6 +1591,10 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             )
             _attach_token_headers(response, _payload_tokens(payload), _payload_tokens(lean))
             _attach_phase_header(response, phase)
+            _emit_test_mode_telemetry(
+                payload=payload, lean=lean, phase=phase, t_start=t_start,
+                request_body=body, response_body_text=assistant_text or "",
+            )
             return response
         except Exception as exc:
             logger.warning("Pipeline failed, forwarding original payload: %s", exc)
@@ -1595,6 +1693,10 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             )
             _attach_token_headers(response, _payload_tokens(payload), _payload_tokens(lean))
             _attach_phase_header(response, phase)
+            _emit_test_mode_telemetry(
+                payload=payload, lean=lean, phase=phase, t_start=t_start,
+                request_body=body, response_body_text=assistant_text or "",
+            )
             return response
         except Exception as exc:
             logger.warning("Pipeline failed, forwarding original payload: %s", exc)
