@@ -531,4 +531,67 @@ async def compose_with_tool_selection(
         or config.upstream_ctx_default
     )
     _apply_token_budget(lean, config.resolve_budget(upstream_ctx))
+
+    # Post-filter token accounting: the Strip / Compose logs in
+    # compose_lean_payload fire BEFORE this Layer-2 tool filter runs,
+    # so they over-report outbound size when L1/fallback drops tools.
+    # Emit a final-state log so external metric collectors (e.g. recall's
+    # benchmark.enrich_sieve) can read the true outbound tokens going
+    # to the upstream LLM. Cheap, idempotent, structured.
+    final_tokens = _estimate_tokens(json.dumps(lean))
+
+    # Per-component breakdown (debugging the lean composition for the
+    # ≥90%-strip release-gate work). Cheap — one estimate per component.
+    sys_tokens = 0
+    ctx_tokens = 0
+    hist_tokens = 0
+    user_tokens = 0
+    for m in lean.get("messages", []) or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content", "") or ""
+        t = _estimate_tokens(c if isinstance(c, str) else json.dumps(c))
+        role = m.get("role")
+        if role == "system":
+            # First system msg = lean system prompt; subsequent = retrieved context
+            if sys_tokens == 0:
+                sys_tokens = t
+            else:
+                ctx_tokens += t
+        elif role in ("user", "assistant"):
+            # Last user message is the current turn; everything else is history.
+            # Approximate by treating the LAST user as user_msg; the rest as history.
+            if role == "user":
+                user_tokens = t  # overwritten — final loop wins (correct)
+            else:
+                hist_tokens += t
+    # The tracking above mis-attributes when there are multiple user turns
+    # in history. Reattribute: total user/assistant tokens minus the final
+    # user message = history.
+    msgs = lean.get("messages", []) or []
+    last_user_tokens = 0
+    for m in reversed(msgs):
+        if isinstance(m, dict) and m.get("role") == "user":
+            c = m.get("content", "") or ""
+            last_user_tokens = _estimate_tokens(c if isinstance(c, str) else json.dumps(c))
+            break
+    user_tokens = last_user_tokens
+    hist_tokens = 0
+    for i, m in enumerate(msgs):
+        if not isinstance(m, dict):
+            continue
+        if i == len(msgs) - 1 and m.get("role") == "user":
+            continue  # last user message
+        if m.get("role") in ("user", "assistant"):
+            c = m.get("content", "") or ""
+            hist_tokens += _estimate_tokens(c if isinstance(c, str) else json.dumps(c))
+
+    tools_tokens_total = _estimate_tokens(json.dumps(lean.get("tools", [])))
+
+    logger.info(
+        "Final lean: tools=%d tokens=%s (post-Layer-2) "
+        "[sys=%d ctx=%d hist=%d user=%d tools=%d]",
+        len(lean.get("tools", [])), f"{final_tokens:,}",
+        sys_tokens, ctx_tokens, hist_tokens, user_tokens, tools_tokens_total,
+    )
     return lean
