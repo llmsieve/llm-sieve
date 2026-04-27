@@ -83,7 +83,7 @@ def test_restart_calls_stop_then_execs_start(monkeypatch, fake_sieve_dir):
 
     called: dict[str, int] = {"stop": 0, "execvp": 0}
 
-    def fake_stop():
+    def fake_stop(pid_file=None):
         called["stop"] += 1
     def fake_execvp(prog, args):
         called["execvp"] += 1
@@ -103,7 +103,7 @@ def test_restart_passes_port_override(monkeypatch, fake_sieve_dir):
 
     captured: dict[str, list] = {"argv": []}
 
-    monkeypatch.setattr(cli_mod, "_stop_proxy", lambda: None)
+    monkeypatch.setattr(cli_mod, "_stop_proxy", lambda pid_file=None: None)
     def fake_execvp(prog, args):
         captured["argv"] = list(args)
     monkeypatch.setattr("os.execvp", fake_execvp)

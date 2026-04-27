@@ -96,8 +96,25 @@ def cli(ctx: click.Context):
 
 
 SIEVE_DIR = Path("~/.sieve").expanduser()
-PID_FILE = SIEVE_DIR / "sieve.pid"
+PID_FILE = SIEVE_DIR / "sieve.pid"  # default; per-port variant below
 LOG_FILE = SIEVE_DIR / "sieve.log"
+
+# Default listen port — kept in sync with config.RecallConfig.listen.port
+# default. The bare PID_FILE above is used for the default-port case
+# (backward compat with existing installs); other ports get a suffix.
+_DEFAULT_PORT = 11435
+
+
+def _pid_file_for_port(port: int) -> Path:
+    """Per-port PID file path. Default port keeps the legacy name.
+
+    Two daemons on the same port can't coexist anyway (kernel bind
+    refusal), so port is a sufficient discriminator without needing a
+    full config fingerprint.
+    """
+    if port == _DEFAULT_PORT:
+        return PID_FILE
+    return SIEVE_DIR / f"sieve-{port}.pid"
 
 
 def _config_exists(config_path: str | None) -> bool:
@@ -151,14 +168,18 @@ def start(
     if port:
         config.listen.port = port
 
-    # Refuse to start a second daemon if one is already running — reading
-    # a stale PID file is harmless (helper auto-cleans) but a live PID
-    # means the user should `sieve stop` first.
-    existing = _read_pid()
+    # PID file is per-port now (default-port keeps legacy ~/.sieve/sieve.pid
+    # so existing installs are unaffected; non-default ports get a suffixed
+    # path so two daemons can coexist if their listen ports differ).
+    pid_file = _pid_file_for_port(config.listen.port)
+
+    # Refuse to start a second daemon ON THIS PORT if one is already running.
+    existing = _read_pid(pid_file)
     if existing is not None:
         console.print(
-            f"[bold yellow]Sieve is already running[/] (pid {existing}). "
-            f"Use [cyan]sieve stop[/] or [cyan]sieve restart[/] first."
+            f"[bold yellow]Sieve is already running on port {config.listen.port}[/] "
+            f"(pid {existing}). Use [cyan]sieve stop -p {config.listen.port}[/] "
+            f"or [cyan]sieve restart -p {config.listen.port}[/] first."
         )
         sys.exit(1)
 
@@ -180,13 +201,13 @@ def start(
     SIEVE_DIR.mkdir(parents=True, exist_ok=True)
 
     if foreground:
-        _run_proxy_foreground(config, verbose)
+        _run_proxy_foreground(config, verbose, pid_file=pid_file)
         return
 
-    _daemonise_and_run(config, verbose)
+    _daemonise_and_run(config, verbose, pid_file=pid_file)
 
 
-def _run_proxy_foreground(config: RecallConfig, verbose: bool) -> None:
+def _run_proxy_foreground(config: RecallConfig, verbose: bool, *, pid_file: Path = PID_FILE) -> None:
     """Run the uvicorn server attached to the current terminal.
 
     Used by ``sieve start --foreground`` (debugging) and as the child
@@ -194,7 +215,7 @@ def _run_proxy_foreground(config: RecallConfig, verbose: bool) -> None:
     it on normal exit so ``sieve status`` / ``sieve stop`` see the
     process correctly.
     """
-    PID_FILE.write_text(str(os.getpid()))
+    pid_file.write_text(str(os.getpid()))
 
     console.print(
         f"[bold green]Sieve[/] proxy starting on "
@@ -213,12 +234,12 @@ def _run_proxy_foreground(config: RecallConfig, verbose: bool) -> None:
         )
     finally:
         try:
-            PID_FILE.unlink(missing_ok=True)
+            pid_file.unlink(missing_ok=True)
         except Exception:
             pass
 
 
-def _daemonise_and_run(config: RecallConfig, verbose: bool) -> None:
+def _daemonise_and_run(config: RecallConfig, verbose: bool, *, pid_file: Path = PID_FILE) -> None:
     """Double-fork to detach from the controlling terminal, then run uvicorn.
 
     Parent prints the "started" banner with the child PID and returns.
@@ -240,7 +261,7 @@ def _daemonise_and_run(config: RecallConfig, verbose: bool) -> None:
         import time
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            child_pid = _read_pid()
+            child_pid = _read_pid(pid_file)
             if child_pid is not None:
                 console.print(
                     f"[bold green]Sieve[/] started on "
@@ -300,7 +321,7 @@ def _daemonise_and_run(config: RecallConfig, verbose: bool) -> None:
 
     # Write the PID file now that we are the final daemon process.
     try:
-        PID_FILE.write_text(str(os.getpid()))
+        pid_file.write_text(str(os.getpid()))
     except Exception:
         os._exit(1)
 
@@ -314,7 +335,7 @@ def _daemonise_and_run(config: RecallConfig, verbose: bool) -> None:
         )
     finally:
         try:
-            PID_FILE.unlink(missing_ok=True)
+            pid_file.unlink(missing_ok=True)
         except Exception:
             pass
         os._exit(0)
@@ -330,25 +351,25 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _read_pid() -> int | None:
-    if not PID_FILE.exists():
+def _read_pid(pid_file: Path = PID_FILE) -> int | None:
+    if not pid_file.exists():
         return None
     try:
-        pid = int(PID_FILE.read_text().strip())
+        pid = int(pid_file.read_text().strip())
     except (ValueError, OSError):
         return None
     if not _pid_alive(pid):
         # Stale PID file — clean it up.
-        PID_FILE.unlink(missing_ok=True)
+        pid_file.unlink(missing_ok=True)
         return None
     return pid
 
 
 @cli.command()
-def status():
+@click.option("--port", "-p", default=None, type=int,
+              help="Check the daemon on this listen port (default: read from config)")
+def status(port: int | None):
     """Show Sieve proxy and store status."""
-    pid = _read_pid()
-
     if not _config_exists(None):
         console.print("[bold red]Sieve is not configured.[/] Run [cyan]sieve init[/].")
         return
@@ -359,6 +380,9 @@ def status():
     except Exception as exc:
         console.print(f"[bold red]Config error:[/] {exc}")
         return
+
+    effective_port = port if port is not None else config.listen.port
+    pid = _read_pid(_pid_file_for_port(effective_port))
 
     if pid:
         console.print(f"[bold green]Sieve is running[/] (pid {pid})")
@@ -403,12 +427,12 @@ def status():
         console.print(f"  Store: [red]error[/] {exc}")
 
 
-def _stop_proxy() -> None:
+def _stop_proxy(pid_file: Path = PID_FILE) -> None:
     """Shared stop logic so `sieve stop` and `sieve restart` use the same path."""
-    pid = _read_pid()
+    pid = _read_pid(pid_file)
     if pid is None:
-        if PID_FILE.exists():
-            PID_FILE.unlink(missing_ok=True)
+        if pid_file.exists():
+            pid_file.unlink(missing_ok=True)
             console.print(
                 "[yellow]Sieve was not running (cleaned up stale state).[/]"
             )
@@ -419,14 +443,14 @@ def _stop_proxy() -> None:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        PID_FILE.unlink(missing_ok=True)
+        pid_file.unlink(missing_ok=True)
         console.print("[yellow]Sieve was not running.[/]")
         return
 
     import time
     for _ in range(50):
         if not _pid_alive(pid):
-            PID_FILE.unlink(missing_ok=True)
+            pid_file.unlink(missing_ok=True)
             console.print("[bold green]Sieve stopped.[/]")
             return
         time.sleep(0.1)
@@ -435,9 +459,17 @@ def _stop_proxy() -> None:
 
 
 @cli.command()
-def stop():
+@click.option("--port", "-p", default=None, type=int,
+              help="Stop the daemon on this listen port (default: read from config)")
+def stop(port: int | None):
     """Gracefully stop the Sieve proxy."""
-    _stop_proxy()
+    if port is None:
+        # Default: read port from the config so stop matches start.
+        try:
+            port = RecallConfig.load().listen.port
+        except Exception:
+            port = _DEFAULT_PORT
+    _stop_proxy(_pid_file_for_port(port))
 
 
 @cli.command()
@@ -445,7 +477,16 @@ def stop():
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 def restart(port: int | None, verbose: bool):
     """Stop and start the Sieve proxy in one step."""
-    _stop_proxy()
+    # Stop the daemon for the listen port we're about to start. Default
+    # port comes from config when --port not given, matching `start`.
+    if port is None:
+        try:
+            stop_port = RecallConfig.load().listen.port
+        except Exception:
+            stop_port = _DEFAULT_PORT
+    else:
+        stop_port = port
+    _stop_proxy(_pid_file_for_port(stop_port))
     # Replace this process with `sieve start` so the new foreground proxy
     # takes over the terminal. Extra flags are forwarded.
     argv = ["sieve", "start"]
