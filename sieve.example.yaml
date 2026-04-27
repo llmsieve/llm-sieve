@@ -83,7 +83,7 @@ writer:
   ghost_validator_enabled: true
 
 retrieval:
-  temporal_dedup_enabled: true
+  temporal_dedup: true
 
 tools:
   enabled: true
