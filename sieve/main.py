@@ -1397,10 +1397,14 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             fact_count = 0
         return detect_phase(fact_count, config.progression)
 
-    # Per-app phase tracking for phase_change events. Reset on app start.
+    # Per-app phase tracking for phase_change events. Reset on app start
+    # AND on each test_mode start_run (so multi-seed campaigns have correct
+    # per-run turn_idx in telemetry events). Stored on app.state so the
+    # test_mode router can reset them.
     _phase_tracker: dict[str, str] = {"last_phase": "OBSERVE"}
-    # Per-app turn counter (used as fallback turn_idx if request payload doesn't carry one).
     _turn_counter: dict[str, int] = {"n": 0}
+    app.state.turn_counter = _turn_counter
+    app.state.phase_tracker = _phase_tracker
 
     def _emit_test_mode_telemetry(
         *, payload: dict, lean: dict, phase, t_start: float,

@@ -119,6 +119,17 @@ def build_router() -> APIRouter:
         if existing is not None and existing != req.run_uuid:
             return _error_409(f"another run active: {existing}")
         request.app.state.active_run_uuid = req.run_uuid
+        # Reset per-run telemetry counters so multi-seed campaigns get
+        # correct turn_idx values per run (without this the counter is
+        # app-lifetime and saturates at 120 after the first run, making
+        # subsequent runs' turn_complete events un-correlatable to the
+        # consumer's per-turn poll).
+        turn_counter = getattr(request.app.state, "turn_counter", None)
+        if turn_counter is not None:
+            turn_counter["n"] = 0
+        phase_tracker = getattr(request.app.state, "phase_tracker", None)
+        if phase_tracker is not None:
+            phase_tracker["last_phase"] = "OBSERVE"
         # Ensure event bus is up.
         init_bus()
         try:
