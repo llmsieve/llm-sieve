@@ -244,14 +244,14 @@ def test_lean_payload_has_recall_tool(config, cache):
 def test_lean_payload_has_user_message(config, cache):
     payload = {
         "model": "qwen3.5:35b",
-        "messages": [{"role": "user", "content": "What is Dubai like?"}],
+        "messages": [{"role": "user", "content": "What is Springfield like?"}],
     }
     decomposed = decompose(payload, cache, api_format="ollama")
     lean = compose_lean_payload(payload, decomposed, config)
 
     user_msgs = [m for m in lean["messages"] if m["role"] == "user"]
     assert len(user_msgs) == 1
-    assert user_msgs[0]["content"] == "What is Dubai like?"
+    assert user_msgs[0]["content"] == "What is Springfield like?"
 
 
 def test_lean_payload_preserves_model(config, cache):

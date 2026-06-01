@@ -222,7 +222,7 @@ def test_decompose_with_history(cache):
 def test_decompose_full_payload(cache):
     """Full payload with all sections."""
     payload = _ollama_payload(
-        "Tell me about Dubai",
+        "Tell me about Springfield",
         system_prompt=SAMPLE_SYSTEM_PROMPT,
         tools=SAMPLE_TOOLS,
         history=SAMPLE_HISTORY,
@@ -324,7 +324,7 @@ def test_workspace_files_extracted(cache):
 def test_log_breakdown(cache, caplog):
     """decompose should log the section breakdown."""
     payload = _ollama_payload(
-        "Tell me about Dubai",
+        "Tell me about Springfield",
         system_prompt=SAMPLE_SYSTEM_PROMPT,
         tools=SAMPLE_TOOLS,
     )
@@ -402,7 +402,7 @@ def test_bloated_agent_framework_payload(cache):
         big_history.append({"role": "assistant", "content": f"Answer {i}: " + "response " * 50})
 
     payload = _ollama_payload(
-        "What's the weather in Dubai?",
+        "What's the weather in Springfield?",
         system_prompt=big_system,
         tools=big_tools,
         history=big_history,

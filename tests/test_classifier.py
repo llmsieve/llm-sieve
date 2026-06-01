@@ -97,7 +97,7 @@ class TestL0PriorContext:
         assert d.needs_retrieval is True
 
     async def test_remember_when(self, classifier_no_embed):
-        d = await classifier_no_embed.classify("remember when I said I was a pilot?")
+        d = await classifier_no_embed.classify("remember when I said I was a librarian?")
         assert d.needs_retrieval is True
 
 
@@ -155,10 +155,10 @@ class TestL0EdgeCases:
 
 class TestL0EntityReference:
     async def test_known_entity_triggers_retrieval(self, store, classifier_no_embed):
-        store.insert_entity("Dubai", type="location")
-        d = await classifier_no_embed.classify("what's the weather in Dubai?")
+        store.insert_entity("Springfield", type="location")
+        d = await classifier_no_embed.classify("what's the weather in Springfield?")
         assert d.needs_retrieval is True
-        assert "Dubai" in d.reason
+        assert "Springfield" in d.reason
 
     async def test_unknown_entity_no_trigger(self, classifier_no_embed):
         # No entities in store — query with no personal signals and no store match
@@ -182,12 +182,12 @@ class TestL1EmbeddingSimilarity:
     async def test_l1_used_for_ambiguous_queries(self, store, classifier_with_embed):
         # Seed the store with a fact that has a vector
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         # A query that doesn't trigger strong L0 positive but has store relevance
-        # "what's the weather in Dubai" — Dubai is not in entities yet
-        d = await classifier_with_embed.classify("what's the weather in Dubai?")
+        # "what's the weather in Springfield" — Springfield is not in entities yet
+        d = await classifier_with_embed.classify("what's the weather in Springfield?")
         # L0: no personal pronoun → depends on entity lookup
         # Either way, needs_retrieval result should be a bool
         assert isinstance(d.needs_retrieval, bool)
@@ -205,7 +205,7 @@ class TestD25PersonalMe:
     """D25 regression: classifier misrouted personal queries to pure-general.
 
     Sample misfires from the 2026-04-21 30-day run:
-      * "What are some good stag do ideas for a finance guy?" — about Marcus.
+      * "What are some good stag do ideas for a finance guy?" — about Robin.
       * "Write a short bio about me." — explicitly about the user.
       * "What are all the temporal changes you've tracked?" — meta about Sieve.
       * "Create a budget breakdown for the next 6 months." — about the mortgage.

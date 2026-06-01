@@ -34,14 +34,14 @@ _NAMES = [
 ]
 
 _CITIES = [
-    "Dubai", "London", "Tokyo", "New York", "Paris", "Berlin", "Sydney",
+    "Springfield", "London", "Tokyo", "New York", "Paris", "Berlin", "Sydney",
     "Singapore", "Toronto", "Mumbai", "Seoul", "San Francisco", "Amsterdam",
     "Barcelona", "Hong Kong", "Istanbul", "Zurich", "Bangkok", "Moscow",
-    "Cape Town", "Dubai Marina", "Abu Dhabi", "Riyadh", "Cairo",
+    "Cape Town", "Lakeside", "Centerville", "Greenfield", "Brookhaven",
 ]
 
 _PROFESSIONS = [
-    "pilot", "software engineer", "data scientist", "architect", "teacher",
+    "librarian", "software engineer", "data scientist", "architect", "teacher",
     "doctor", "chef", "photographer", "journalist", "consultant",
     "designer", "researcher", "entrepreneur", "analyst", "manager",
 ]

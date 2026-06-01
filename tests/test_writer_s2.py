@@ -72,7 +72,7 @@ def _make_fact(content, fact_type="objective", category="general", confidence=0.
 
 class TestS2Gate:
     def test_short_message_does_not_trigger(self):
-        assert _s2_gate("I live in Dubai.", []) is False
+        assert _s2_gate("I live in Springfield.", []) is False
 
     def test_long_message_no_s1_triggers(self):
         text = "The weather has been really nice lately and I've been spending lots of time outdoors with friends and I really enjoy it."
@@ -80,19 +80,19 @@ class TestS2Gate:
         assert _s2_gate(text, []) is True
 
     def test_long_message_with_uncovered_proper_nouns_triggers(self):
-        text = "I had dinner with Marcus at that Italian place near the Marina yesterday evening."
-        s1 = []  # S1 didn't catch Marcus
+        text = "I had dinner with Robin at that Italian place near the Marina yesterday evening."
+        s1 = []  # S1 didn't catch Robin
         assert _s2_gate(text, s1) is True
 
     def test_long_message_all_nouns_covered_no_trigger(self):
-        text = "I live in Dubai and I work at Emirates as a pilot for the main fleet."
+        text = "I live in Springfield and I work at City Library as a librarian for the main fleet."
         s1_fact1 = ExtractedFact(
-            content="User lives in Dubai", fact_type="objective", category="location",
-            entity_names=["Dubai"],
+            content="User lives in Springfield", fact_type="objective", category="location",
+            entity_names=["Springfield"],
         )
         s1_fact2 = ExtractedFact(
-            content="User works at Emirates", fact_type="objective", category="occupation",
-            entity_names=["Emirates"],
+            content="User works at City Library", fact_type="objective", category="occupation",
+            entity_names=["City Library"],
         )
         result = _s2_gate(text, [s1_fact1, s1_fact2])
         # Could go either way depending on exact noun coverage
@@ -206,7 +206,7 @@ class TestS2Parsing:
 
 class TestConflictResolutionNoExisting:
     def test_no_existing_stores_as_current(self):
-        fact = _make_fact("User lives in Dubai")
+        fact = _make_fact("User lives in Springfield")
         res = resolve_conflict(fact, None)
         assert res.action == "store"
         assert res.new_status == "current"
@@ -219,15 +219,15 @@ class TestConflictResolutionNoExisting:
 
 class TestConflictResolutionSameValue:
     def test_same_value_boosts_confidence(self):
-        fact = _make_fact("User lives in Dubai")
-        existing = {"id": "abc", "content": "User lives in Dubai", "confidence": 0.7, "usage_count": 5}
+        fact = _make_fact("User lives in Springfield")
+        existing = {"id": "abc", "content": "User lives in Springfield", "confidence": 0.7, "usage_count": 5}
         res = resolve_conflict(fact, existing)
         assert res.action == "boost"
         assert res.new_confidence > 0.7
 
     def test_same_value_case_insensitive(self):
-        fact = _make_fact("User lives in dubai")
-        existing = {"id": "abc", "content": "User lives in Dubai", "confidence": 0.7, "usage_count": 1}
+        fact = _make_fact("User lives in springfield")
+        existing = {"id": "abc", "content": "User lives in Springfield", "confidence": 0.7, "usage_count": 1}
         # _content_equivalent lowercases before comparison
         res = resolve_conflict(fact, existing)
         assert res.action == "boost"
@@ -261,7 +261,7 @@ class TestConflictResolutionSpeculative:
 class TestConflictResolutionHighConfidence:
     def test_high_confidence_low_coherence_quarantines(self):
         fact = _make_fact("User lives in Tokyo")
-        existing = {"id": "abc", "content": "User lives in Dubai", "confidence": 0.9, "usage_count": 15}
+        existing = {"id": "abc", "content": "User lives in Springfield", "confidence": 0.9, "usage_count": 15}
         res = resolve_conflict(fact, existing, session_coherence=0.2)
         assert res.action == "quarantine"
         assert res.new_status == "quarantined"
@@ -281,7 +281,7 @@ class TestConflictResolutionHighConfidence:
 
     def test_high_confidence_otherwise_provisional(self):
         fact = _make_fact("User lives in Tokyo")
-        existing = {"id": "abc", "content": "User lives in Dubai", "confidence": 0.9, "usage_count": 15}
+        existing = {"id": "abc", "content": "User lives in Springfield", "confidence": 0.9, "usage_count": 15}
         res = resolve_conflict(fact, existing, session_coherence=0.8)
         assert res.action == "provisional"
         assert res.new_status == "provisional"
@@ -290,7 +290,7 @@ class TestConflictResolutionHighConfidence:
 class TestConflictResolutionLowConfidence:
     def test_low_confidence_existing_superseded(self):
         fact = _make_fact("User lives in Sydney")
-        existing = {"id": "abc", "content": "User lives in Melbourne", "confidence": 0.4, "usage_count": 1}
+        existing = {"id": "abc", "content": "User lives in Riverside", "confidence": 0.4, "usage_count": 1}
         res = resolve_conflict(fact, existing)
         assert res.action == "supersede"
 
@@ -306,23 +306,23 @@ class TestConflictResolutionLowConfidence:
 
 class TestContentHelpers:
     def test_content_equivalent_exact(self):
-        assert _content_equivalent("lives in dubai", "lives in dubai")
+        assert _content_equivalent("lives in springfield", "lives in springfield")
 
     def test_content_equivalent_with_prefix(self):
-        assert _content_equivalent("user lives in dubai", "lives in dubai")
+        assert _content_equivalent("user lives in springfield", "lives in springfield")
 
     def test_content_not_equivalent(self):
-        assert not _content_equivalent("lives in dubai", "lives in tokyo")
+        assert not _content_equivalent("lives in springfield", "lives in tokyo")
 
     def test_is_speculative(self):
         assert _is_speculative_text("I'm thinking about getting a dog")
         assert _is_speculative_text("Maybe I should learn piano")
-        assert not _is_speculative_text("I live in Dubai")
+        assert not _is_speculative_text("I live in Springfield")
 
     def test_is_numeric(self):
         assert _is_numeric_content("User earns $180,000 per year")
         assert _is_numeric_content("User is 38 years old")
-        assert not _is_numeric_content("User lives in Dubai")
+        assert not _is_numeric_content("User lives in Springfield")
 
 
 # ─── Predicate-based contradiction ──────────────────────────────────────────
@@ -336,7 +336,7 @@ class TestPredicateContradiction:
 
     # Regression: existing supersession cases must still fire
     def test_residence_change_contradicts(self):
-        assert self._check("User lives in Sydney", "User lives in Melbourne")
+        assert self._check("User lives in Sydney", "User lives in Riverside")
 
     def test_likes_change_contradicts(self):
         assert self._check("User likes cats", "User likes dogs")
@@ -549,7 +549,7 @@ class TestSessionCoherence:
         assert score == 1.0
 
     async def test_similar_messages_high_coherence(self):
-        msgs = ["I live in Dubai", "I love Dubai weather", "Dubai is great"]
+        msgs = ["I live in Springfield", "I love Springfield weather", "Springfield is great"]
         score = await compute_session_coherence(msgs, _async_embed)
         # Similar first chars → similar embeddings → high coherence
         assert score > 0.5
@@ -573,7 +573,7 @@ class TestSessionCoherence:
 class TestMemoryWriterS2Integration:
     async def test_s1_still_works(self, store):
         writer = MemoryWriter(store, embed_fn=_async_embed)
-        result = await writer.process("I live in Dubai and I'm 38 years old.")
+        result = await writer.process("I live in Springfield and I'm 38 years old.")
         assert result.facts_written >= 1
 
     async def test_subjective_coexistence_checkpoint(self, store):
@@ -613,8 +613,8 @@ class TestMemoryWriterS2Integration:
         """Checkpoint: contradicting a high-confidence fact in low-coherence session → quarantine."""
         # Seed a high-confidence well-confirmed fact
         fact_id = store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
             confidence=0.95,
         )
         # Boost usage_count above 10
@@ -647,8 +647,8 @@ class TestMemoryWriterS2Integration:
 
     async def test_dedup_still_works(self, store):
         writer = MemoryWriter(store, embed_fn=_async_embed)
-        r1 = await writer.process("I live in Dubai.")
-        r2 = await writer.process("I live in Dubai.")
+        r1 = await writer.process("I live in Springfield.")
+        r2 = await writer.process("I live in Springfield.")
         assert r1.facts_written >= 1
         assert r2.facts_skipped >= 1 or r2.facts_written == 0
 
@@ -684,13 +684,13 @@ class TestStoreConflictMethods:
         assert fact["confidence"] <= 1.0
 
     def test_find_similar_facts(self, store):
-        store.insert_fact("User lives in Dubai", embedding=_fake_embed("User lives in Dubai"))
-        results = store.find_similar_facts(_fake_embed("User lives in Dubai"), limit=5, max_distance=1.0)
+        store.insert_fact("User lives in Springfield", embedding=_fake_embed("User lives in Springfield"))
+        results = store.find_similar_facts(_fake_embed("User lives in Springfield"), limit=5, max_distance=1.0)
         assert len(results) >= 1
 
     def test_find_similar_facts_filtered_by_distance(self, store):
-        store.insert_fact("User lives in Dubai", embedding=_fake_embed("User lives in Dubai"))
-        results = store.find_similar_facts(_fake_embed("User lives in Dubai"), limit=5, max_distance=0.001)
+        store.insert_fact("User lives in Springfield", embedding=_fake_embed("User lives in Springfield"))
+        results = store.find_similar_facts(_fake_embed("User lives in Springfield"), limit=5, max_distance=0.001)
         # Only exact matches within tiny distance
         # Depends on embedding — may or may not match
         assert isinstance(results, list)

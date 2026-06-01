@@ -33,7 +33,7 @@ async def test_embed_single(embedding_client, httpx_mock):
     )
 
     await embedding_client.start()
-    result = await embedding_client.embed("User lives in Dubai")
+    result = await embedding_client.embed("User lives in Springfield")
     await embedding_client.stop()
 
     # Embedding client now L2-normalizes the output

@@ -289,15 +289,15 @@ class TestExtractAssistantMessage:
 class TestBuildToolResult:
     def test_ollama_tool_result(self):
         tc = {"function": {"name": "recall", "arguments": {}}}
-        msg = _build_tool_result(tc, "User lives in Dubai", "ollama")
+        msg = _build_tool_result(tc, "User lives in Springfield", "ollama")
         assert msg["role"] == "tool"
-        assert "Dubai" in msg["content"]
+        assert "Springfield" in msg["content"]
 
     def test_openai_tool_result_has_id(self):
         tc = {"id": "call_abc123", "function": {"name": "recall", "arguments": "{}"}}
-        msg = _build_tool_result(tc, "User is a pilot", "openai")
+        msg = _build_tool_result(tc, "User is a librarian", "openai")
         assert msg["tool_call_id"] == "call_abc123"
-        assert "pilot" in msg["content"]
+        assert "librarian" in msg["content"]
 
     def test_empty_result_gives_fallback(self):
         tc = {"function": {"name": "recall", "arguments": {}}}
@@ -348,13 +348,13 @@ class TestRecallHandlerSingleRound:
     """LLM calls recall once, then returns text."""
 
     async def test_ollama_single_recall(self):
-        retriever = FakeRetriever({"user location": "## Recalled context\n- User lives in Dubai"})
+        retriever = FakeRetriever({"user location": "## Recalled context\n- User lives in Springfield"})
         proxy = MagicMock()
         handler = RecallHandler(proxy, retriever, config=None)
 
         handler._stream_and_detect = AsyncMock(side_effect=[
             _mock_stream_result(_ollama_recall_response("user location"), "ollama"),
-            _mock_stream_result(_ollama_text_response("You live in Dubai!"), "ollama"),
+            _mock_stream_result(_ollama_text_response("You live in Springfield!"), "ollama"),
         ])
 
         request = _make_request()
@@ -362,18 +362,18 @@ class TestRecallHandlerSingleRound:
 
         resp = await handler.handle_chat(request, payload, api_format="ollama")
         data = json.loads(resp.body)
-        assert "Dubai" in data["message"]["content"]
+        assert "Springfield" in data["message"]["content"]
         assert resp.headers.get("X-Sieve-Rounds") == "1"
         assert retriever.calls == ["user location"]
 
     async def test_openai_single_recall(self):
-        retriever = FakeRetriever({"user job": "## Recalled context\n- User is a pilot"})
+        retriever = FakeRetriever({"user job": "## Recalled context\n- User is a librarian"})
         proxy = MagicMock()
         handler = RecallHandler(proxy, retriever, config=None)
 
         handler._stream_and_detect = AsyncMock(side_effect=[
             _mock_stream_result(_openai_recall_response("user job"), "openai"),
-            _mock_stream_result(_openai_text_response("You're a pilot at Emirates."), "openai"),
+            _mock_stream_result(_openai_text_response("You're a librarian at City Library."), "openai"),
         ])
 
         request = _make_request()
@@ -381,7 +381,7 @@ class TestRecallHandlerSingleRound:
 
         resp = await handler.handle_chat(request, payload, api_format="openai")
         data = json.loads(resp.body)
-        assert "pilot" in data["choices"][0]["message"]["content"]
+        assert "librarian" in data["choices"][0]["message"]["content"]
         assert resp.headers.get("X-Sieve-Rounds") == "1"
 
 
@@ -391,7 +391,7 @@ class TestRecallHandlerMultiRound:
     async def test_two_recall_rounds(self):
         retriever = FakeRetriever({
             "user financial situation": "## Recalled context\n- User earns $180k/year",
-            "user home ownership": "## Recalled context\n- User lives in Dubai",
+            "user home ownership": "## Recalled context\n- User lives in Springfield",
         })
         proxy = MagicMock()
         handler = RecallHandler(proxy, retriever, config=None)
@@ -399,7 +399,7 @@ class TestRecallHandlerMultiRound:
         handler._stream_and_detect = AsyncMock(side_effect=[
             _mock_stream_result(_ollama_recall_response("user financial situation"), "ollama"),
             _mock_stream_result(_ollama_recall_response("user home ownership"), "ollama"),
-            _mock_stream_result(_ollama_text_response("Based on your $180k salary and living in Dubai, I'd recommend..."), "ollama"),
+            _mock_stream_result(_ollama_text_response("Based on your $180k salary and living in Springfield, I'd recommend..."), "ollama"),
         ])
 
         request = _make_request()
@@ -407,7 +407,7 @@ class TestRecallHandlerMultiRound:
 
         resp = await handler.handle_chat(request, payload, api_format="ollama")
         data = json.loads(resp.body)
-        assert "$180k" in data["message"]["content"] or "Dubai" in data["message"]["content"]
+        assert "$180k" in data["message"]["content"] or "Springfield" in data["message"]["content"]
         assert resp.headers.get("X-Sieve-Rounds") == "2"
         assert len(retriever.calls) == 2
 

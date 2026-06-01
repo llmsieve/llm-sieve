@@ -64,7 +64,7 @@ def test_rejects_twin_brother_named_jamie():
 
 def test_allows_unrelated_person_named_differently():
     fact = _make_fact(
-        "User has a colleague named Marcus", entities=["Marcus"],
+        "User has a colleague named Robin", entities=["Robin"],
         category="relationship",
     )
     keep, _ = _validate_s2_fact(fact, "Jamie Rivera", ["Jamie"])

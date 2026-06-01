@@ -50,17 +50,20 @@ async def _async_embed(text: str) -> list[float]:
 
 
 # ── conversation to seed ─────────────────────────────────────────────────────
+# Fully fictional persona. Do NOT use real personal data here — this file
+# is shipped publicly. See tests/_test_persona.py if you need to add new
+# fixture data; reuse the existing persona where possible.
 CONVERSATION = [
     # (role, text)
-    ("user",      "Hi there! I'm a pilot based in Dubai."),
-    ("assistant", "Great to meet you! How long have you been flying?"),
-    ("user",      "About 12 years. My partner is Madeline and I have two children."),
-    ("assistant", "That's wonderful. Do your kids enjoy travelling?"),
-    ("user",      "They love it. I work for Emirates Airlines. I'm 38 years old."),
-    ("assistant", "Emirates is an amazing airline. Where did you grow up?"),
-    ("user",      "I'm originally from Melbourne, Australia. Moved to Dubai five years ago."),
-    ("assistant", "What a journey! What do you enjoy doing in Dubai?"),
-    ("user",      "I love the food here. My best friend is Marcus, he's also a pilot."),
+    ("user",      "Hi there! I'm a librarian based in Springfield."),
+    ("assistant", "Great to meet you! How long have you been a librarian?"),
+    ("user",      "About 12 years. My partner is Jordan and I have two children."),
+    ("assistant", "That's wonderful. Do your kids enjoy reading?"),
+    ("user",      "They love it. I work for the City Library. I'm 34 years old."),
+    ("assistant", "City Library is a great institution. Where did you grow up?"),
+    ("user",      "I'm originally from Riverside. Moved to Springfield five years ago."),
+    ("assistant", "What a journey! What do you enjoy doing in Springfield?"),
+    ("user",      "I love the food here. My best friend is Robin, also a librarian."),
 ]
 
 

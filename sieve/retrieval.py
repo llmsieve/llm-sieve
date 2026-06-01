@@ -11,7 +11,7 @@ Usage::
 
     retriever = ContextRetriever(store, embed_fn=embedding_client.embed)
     ctx = await retriever.retrieve("weather where I live", top_k=5)
-    # ctx.text  → "## Recalled context\n- User lives in Dubai\n..."
+    # ctx.text  → "## Recalled context\n- User lives in Springfield\n..."
     # ctx.facts → list of fact dicts
 """
 

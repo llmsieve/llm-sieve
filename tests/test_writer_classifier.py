@@ -31,7 +31,7 @@ class TestDoNotSkipFactShares:
         "I prefer kimchi stew over pad thai for dinner.",
         "Born in Manchester, moved to London in 2019.",
         "My partner is a barrister.",
-        "We have three children — Marcus, Amy, and Tom.",
+        "We have three children — Robin, Amy, and Tom.",
         "I went to Cambridge for university.",
         "Just so you know, my phone number ends in 4827.",
     ])
@@ -47,7 +47,7 @@ class TestDoNotSkipProperNounMessages:
     @pytest.mark.parametrize("text", [
         "Pepper is doing well today.",          # short, but proper noun
         "Lisbon was wonderful.",                # short, but proper noun
-        "Marcus called this morning.",          # short, but proper noun
+        "Robin called this morning.",          # short, but proper noun
         "Tell me about the Cotswolds.",         # question, but proper noun
         "Thanks for asking about Naoise.",      # social start, but proper noun
     ])
@@ -200,7 +200,7 @@ class TestPhase3Calibration:
         ("Going back to the rope thing.", False),  # default-safe (proper-shape)
         ("Can you elaborate on that point?", True),
         ("Right, makes sense.", True),  # short social
-        ("And what about Marcus?", False),  # proper noun
+        ("And what about Robin?", False),  # proper noun
 
         # 6 filler — all skippable
         ("thanks", True), ("ok", True), ("great", True),

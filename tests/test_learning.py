@@ -62,9 +62,9 @@ def learning_loop(store):
 
 class TestRetrievalRelevance:
     async def test_identical_text_scores_high(self):
-        facts = [{"id": "f1", "content": "User lives in Dubai"}]
+        facts = [{"id": "f1", "content": "User lives in Springfield"}]
         scores = await score_retrieval_relevance(
-            "User lives in Dubai", facts, _async_embed, threshold=0.7,
+            "User lives in Springfield", facts, _async_embed, threshold=0.7,
         )
         assert len(scores) == 1
         assert scores[0]["similarity"] > 0.9
@@ -174,8 +174,8 @@ class TestLearningLoop:
 
     async def test_tuning_triggers_at_interval(self, learning_loop, store):
         # Seed some facts
-        store.insert_fact("User lives in Dubai", embedding=_fake_embed("User lives in Dubai"))
-        store.insert_fact("User is a pilot", embedding=_fake_embed("User is a pilot"))
+        store.insert_fact("User lives in Springfield", embedding=_fake_embed("User lives in Springfield"))
+        store.insert_fact("User is a librarian", embedding=_fake_embed("User is a librarian"))
 
         # Run 5 interactions (tune_interval=5)
         result = None
@@ -244,14 +244,14 @@ class TestSimulated50Interactions:
         # Seed facts
         fact_ids = []
         for content in [
-            "User lives in Dubai",
-            "User is a pilot at Emirates",
+            "User lives in Springfield",
+            "User is a librarian at City Library",
             "User is 38 years old",
             "User has two children",
-            "User's partner is Madeline",
+            "User's partner is Jordan",
             "User earns $180k per year",
-            "User is from Melbourne",
-            "User's best friend is Marcus",
+            "User is from Riverside",
+            "User's best friend is Robin",
         ]:
             fid = store.insert_fact(content, embedding=_fake_embed(content))
             fact_ids.append(fid)
@@ -266,7 +266,7 @@ class TestSimulated50Interactions:
             "how old am I?",
             "what is my salary?",
             "where am I from?",
-            "who is Marcus?",
+            "who is Robin?",
             "what's for dinner?",
         ]
 

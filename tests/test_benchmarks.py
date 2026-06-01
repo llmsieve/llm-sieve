@@ -104,7 +104,7 @@ class TestTokenReduction:
 
     def test_lean_payload_token_count(self):
         """Measure lean payload (~500-1500 tokens)."""
-        payload = make_lean_payload("Where do I live?", context="User lives in Dubai")
+        payload = make_lean_payload("Where do I live?", context="User lives in Springfield")
         raw = json.dumps(payload)
         tokens = _estimate_tokens(raw)
         RESULTS["lean_tokens"] = tokens
@@ -113,7 +113,7 @@ class TestTokenReduction:
     def test_token_reduction_ratio(self):
         """Verify 10x+ reduction ratio."""
         bloated = make_bloated_payload("Where do I live?")
-        lean = make_lean_payload("Where do I live?", context="User lives in Dubai")
+        lean = make_lean_payload("Where do I live?", context="User lives in Springfield")
         bloat_tokens = _estimate_tokens(json.dumps(bloated))
         lean_tokens = _estimate_tokens(json.dumps(lean))
         ratio = bloat_tokens / lean_tokens
@@ -160,13 +160,13 @@ class TestTokenReduction:
 
     def test_lean_payload_includes_tool_and_context(self):
         """Lean payload must include recall tool + context."""
-        payload = make_lean_payload("Where do I live?", context="User lives in Dubai")
+        payload = make_lean_payload("Where do I live?", context="User lives in Springfield")
         assert len(payload["tools"]) == 1
         assert payload["tools"][0]["function"]["name"] == "recall"
         # Context injected as second system message
         system_msgs = [m for m in payload["messages"] if m["role"] == "system"]
         assert len(system_msgs) == 2
-        assert "Dubai" in system_msgs[1]["content"]
+        assert "Springfield" in system_msgs[1]["content"]
 
     def test_fingerprint_cache_second_request(self, tmp_path):
         """Second identical request should detect no changes."""
@@ -235,7 +235,7 @@ class TestLatency:
 
     def test_s1_extraction_latency(self):
         """Stage 1 extraction should complete in <5ms."""
-        text = "My name is Alice, I live in Dubai, I work at Google as a software engineer."
+        text = "My name is Alice, I live in Springfield, I work at Google as a software engineer."
 
         times = []
         for _ in range(100):
@@ -250,7 +250,7 @@ class TestLatency:
     def test_conflict_resolution_latency(self):
         """Conflict resolution should complete in <1ms (no I/O)."""
         new = _make_fact("User lives in London")
-        existing = _existing_fact("User lives in Dubai", confidence=0.9, usage_count=20)
+        existing = _existing_fact("User lives in Springfield", confidence=0.9, usage_count=20)
 
         times = []
         for _ in range(1000):
@@ -264,7 +264,7 @@ class TestLatency:
 
     def test_sanitize_context_latency(self):
         """Data minimisation should be fast."""
-        text = "Fact a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 says user lives in Dubai (confidence: 0.85) (objective)"
+        text = "Fact a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 says user lives in Springfield (confidence: 0.85) (objective)"
         times = []
         for _ in range(1000):
             t0 = time.monotonic()
@@ -455,7 +455,7 @@ class TestEdgeCaseContradictions:
     def test_contradiction_high_confidence_provisional(self):
         """New fact contradicting high-confidence existing → provisional."""
         new = _make_fact("User lives in London")
-        existing = _existing_fact("User lives in Dubai", confidence=0.9, usage_count=20)
+        existing = _existing_fact("User lives in Springfield", confidence=0.9, usage_count=20)
         result = resolve_conflict(new, existing, session_coherence=0.8)
         assert result.action == "provisional"
         assert result.new_status == "provisional"
@@ -464,7 +464,7 @@ class TestEdgeCaseContradictions:
     def test_contradiction_low_coherence_quarantine(self):
         """Contradiction in low-coherence session → quarantine."""
         new = _make_fact("User lives in Mars")
-        existing = _existing_fact("User lives in Dubai", confidence=0.95, usage_count=50)
+        existing = _existing_fact("User lives in Springfield", confidence=0.95, usage_count=50)
         result = resolve_conflict(new, existing, session_coherence=0.1)
         assert result.action == "quarantine"
         assert result.new_status == "quarantined"
@@ -488,7 +488,7 @@ class TestEdgeCaseContradictions:
 
     def test_contradiction_low_confidence_supersede(self):
         """New fact supersedes low-confidence existing."""
-        new = _make_fact("User lives in Dubai", confidence=0.8)
+        new = _make_fact("User lives in Springfield", confidence=0.8)
         existing = _existing_fact("User lives in London", confidence=0.3, usage_count=2)
         result = resolve_conflict(new, existing)
         assert result.action == "supersede"
@@ -496,8 +496,8 @@ class TestEdgeCaseContradictions:
 
     def test_same_value_boost(self):
         """Re-confirming same fact boosts confidence."""
-        new = _make_fact("User lives in Dubai")
-        existing = _existing_fact("User lives in Dubai", confidence=0.7)
+        new = _make_fact("User lives in Springfield")
+        existing = _existing_fact("User lives in Springfield", confidence=0.7)
         result = resolve_conflict(new, existing)
         assert result.action == "boost"
         assert result.new_confidence > 0.7
@@ -507,7 +507,7 @@ class TestEdgeCaseContradictions:
         """Same-session contradiction: later wins, both at 0.5."""
         new = _make_fact("User lives in Tokyo")
         # Medium confidence, not too high, not too low — hits the fallthrough
-        existing = _existing_fact("User lives in Dubai", confidence=0.6, usage_count=5)
+        existing = _existing_fact("User lives in Springfield", confidence=0.6, usage_count=5)
         result = resolve_conflict(new, existing)
         assert result.action == "supersede"
         assert result.new_confidence == 0.5
@@ -521,10 +521,10 @@ class TestEdgeCaseSessionCoherence:
         """Similar topic messages → high coherence."""
         # Simulate embeddings for related topics using themed embeddings
         msgs = [
-            "Tell me about Dubai weather",
-            "What's the temperature in Dubai today",
-            "Dubai climate in summer",
-            "Average humidity in Dubai",
+            "Tell me about Springfield weather",
+            "What's the temperature in Springfield today",
+            "Springfield climate in summer",
+            "Average humidity in Springfield",
         ]
         # Use themed embeddings (same theme = high cosine similarity)
         embeddings = [_themed_embedding(1, 768, noise=0.1) for _ in msgs]
@@ -634,7 +634,7 @@ class TestEdgeCaseHypotheticalVsDeclarative:
 
     def test_declarative_not_speculative(self):
         """Declarative statements are not flagged speculative."""
-        assert not _is_speculative_text("I live in Dubai")
+        assert not _is_speculative_text("I live in Springfield")
         assert not _is_speculative_text("My name is Alice")
         assert not _is_speculative_text("I work at Google")
         RESULTS.setdefault("edge_cases", {})["declarative_detection"] = "pass"
@@ -651,7 +651,7 @@ class TestEdgeCaseHypotheticalVsDeclarative:
     def test_speculative_conflict_low_confidence(self):
         """Speculative fact stored with low confidence."""
         new = _make_fact("User is thinking about moving to London")
-        existing = _existing_fact("User lives in Dubai", confidence=0.9, usage_count=20)
+        existing = _existing_fact("User lives in Springfield", confidence=0.9, usage_count=20)
         result = resolve_conflict(new, existing, session_coherence=0.9)
         assert result.action == "store"
         assert result.new_confidence <= 0.35
@@ -659,11 +659,11 @@ class TestEdgeCaseHypotheticalVsDeclarative:
 
     def test_s1_extracts_declarative(self):
         """S1 extracts declarative facts from text."""
-        facts = extract_facts_s1("My name is Alice and I live in Dubai")
+        facts = extract_facts_s1("My name is Alice and I live in Springfield")
         contents = [f.content.lower() for f in facts]
         # Should find at least name or location
         has_name = any("alice" in c for c in contents)
-        has_location = any("dubai" in c for c in contents)
+        has_location = any("springfield" in c for c in contents)
         assert has_name or has_location
         RESULTS.setdefault("edge_cases", {})["s1_declarative_extraction"] = "pass"
 
@@ -707,25 +707,25 @@ class TestEdgeCaseDataMinimisation:
     """Context block sanitisation edge cases."""
 
     def test_strips_uuid_keeps_content(self):
-        text = "Fact a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 says user lives in Dubai"
+        text = "Fact a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 says user lives in Springfield"
         clean = sanitize_context_block(text)
         assert "a1b2c3d4" not in clean
-        assert "Dubai" in clean
+        assert "Springfield" in clean
 
     def test_strips_confidence_keeps_content(self):
-        text = "User lives in Dubai (confidence: 0.85)"
+        text = "User lives in Springfield (confidence: 0.85)"
         clean = sanitize_context_block(text)
         assert "0.85" not in clean
-        assert "Dubai" in clean
+        assert "Springfield" in clean
 
     def test_strips_fact_type_annotation(self):
-        text = "User is a pilot (objective)"
+        text = "User is a librarian (objective)"
         clean = sanitize_context_block(text)
         assert "(objective)" not in clean
-        assert "pilot" in clean
+        assert "librarian" in clean
 
     def test_clean_text_passthrough(self):
-        text = "User lives in Dubai and works at Google"
+        text = "User lives in Springfield and works at Google"
         assert sanitize_context_block(text) == text
 
 

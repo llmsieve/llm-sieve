@@ -137,25 +137,25 @@ class TestHTTPSWarning:
 
 class TestDataMinimisation:
     def test_removes_uuid(self):
-        text = "Fact a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 says user lives in Dubai"
+        text = "Fact a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6 says user lives in Springfield"
         clean = sanitize_context_block(text)
         assert "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" not in clean
-        assert "Dubai" in clean
+        assert "Springfield" in clean
 
     def test_removes_confidence_scores(self):
-        text = "User lives in Dubai (confidence: 0.85)"
+        text = "User lives in Springfield (confidence: 0.85)"
         clean = sanitize_context_block(text)
         assert "confidence" not in clean
         assert "0.85" not in clean
 
     def test_removes_fact_type(self):
-        text = "User is a pilot (objective)"
+        text = "User is a librarian (objective)"
         clean = sanitize_context_block(text)
         assert "(objective)" not in clean
-        assert "pilot" in clean
+        assert "librarian" in clean
 
     def test_clean_text_unchanged(self):
-        text = "User lives in Dubai"
+        text = "User lives in Springfield"
         assert sanitize_context_block(text) == text
 
     def test_empty_string(self):
@@ -304,8 +304,8 @@ class TestAuditLog:
         ms.open()
         ms.init_schema()
 
-        ms.insert_fact("User lives in Dubai", embedding=None)
-        ms.insert_fact("User is a pilot", embedding=None)
+        ms.insert_fact("User lives in Springfield", embedding=None)
+        ms.insert_fact("User is a librarian", embedding=None)
 
         # Check audit log
         rows = ms.conn.execute(
@@ -316,7 +316,7 @@ class TestAuditLog:
         all_entries = ms.conn.execute("SELECT * FROM audit_log").fetchall()
         for row in all_entries:
             row_str = str(row)
-            assert "Dubai" not in row_str
-            assert "pilot" not in row_str
+            assert "Springfield" not in row_str
+            assert "librarian" not in row_str
 
         ms.close()

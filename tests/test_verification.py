@@ -359,15 +359,15 @@ class TestVerifyResponse:
         assert "daughter" in v.flagged_relations
 
     def test_known_entity_in_facts_passes(self, populated_store):
-        facts = [{"content": "User has a colleague Marcus Webb at Example"}]
+        facts = [{"content": "User has a colleague Robin Webb at Example"}]
         v = verify_response(
             "Who works with the user?",
-            "The user has a colleague Marcus Webb.",
+            "The user has a colleague Robin Webb.",
             populated_store,
             retrieved_facts=facts,
         )
-        # Marcus Webb is in retrieved facts, so should pass even if not in entities
-        assert v.is_clean or "Marcus" not in v.flagged_entities
+        # Robin Webb is in retrieved facts, so should pass even if not in entities
+        assert v.is_clean or "Robin" not in v.flagged_entities
 
 
 # ─── Body parsing helpers ────────────────────────────────────────────────────

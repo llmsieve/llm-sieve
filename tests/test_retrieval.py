@@ -61,13 +61,13 @@ class TestEmptyStore:
 
 class TestFallbackRetrieval:
     async def test_returns_recent_facts_without_embeddings(self, store, retriever):
-        store.insert_fact("User is a pilot", embedding=None)
-        store.insert_fact("User lives in Dubai", embedding=None)
+        store.insert_fact("User is a librarian", embedding=None)
+        store.insert_fact("User lives in Springfield", embedding=None)
 
         ctx = await retriever.retrieve("where do I live?")
         assert len(ctx.facts) >= 1
         contents = [f["content"] for f in ctx.facts]
-        assert any("pilot" in c or "Dubai" in c for c in contents)
+        assert any("librarian" in c or "Springfield" in c for c in contents)
 
     async def test_respects_top_k(self, store):
         for i in range(10):
@@ -95,22 +95,22 @@ class TestFallbackRetrieval:
 class TestVectorSearch:
     async def test_vector_search_returns_facts(self, store, retriever_with_embed):
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         ctx = await retriever_with_embed.retrieve("where do I live?")
         assert len(ctx.facts) >= 1
-        assert any("Dubai" in f["content"] for f in ctx.facts)
+        assert any("Springfield" in f["content"] for f in ctx.facts)
 
     async def test_multiple_facts_retrieved(self, store, retriever_with_embed):
-        for fact in ["User is a pilot", "User lives in Dubai", "User's partner is Madeline"]:
+        for fact in ["User is a librarian", "User lives in Springfield", "User's partner is Jordan"]:
             store.insert_fact(fact, embedding=_fake_embed(fact))
 
         ctx = await retriever_with_embed.retrieve("tell me about the user")
         assert len(ctx.facts) >= 1
 
     async def test_token_estimate_set(self, store, retriever_with_embed):
-        store.insert_fact("User lives in Dubai", embedding=_fake_embed("User lives in Dubai"))
+        store.insert_fact("User lives in Springfield", embedding=_fake_embed("User lives in Springfield"))
         ctx = await retriever_with_embed.retrieve("where do I live?")
         assert ctx.token_estimate >= 0
 
@@ -120,38 +120,38 @@ class TestVectorSearch:
 class TestGraphTraversal:
     async def test_graph_traversal_surfaces_related_facts(self, store, retriever_with_embed):
         # Create entity + fact linked to entity
-        entity_id = store.insert_entity("Dubai", type="location")
+        entity_id = store.insert_entity("Springfield", type="location")
         fact_id = store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
             entity_ids=[entity_id],
         )
 
         # Create related fact linked to same entity (no embedding — won't be in vector results)
         fact2_id = store.insert_fact(
-            "User moved to Dubai five years ago",
+            "User moved to Springfield five years ago",
             embedding=None,
             entity_ids=[entity_id],
         )
 
-        ctx = await retriever_with_embed.retrieve("User lives in Dubai")
+        ctx = await retriever_with_embed.retrieve("User lives in Springfield")
         contents = [f["content"] for f in ctx.facts]
         # Primary fact should be there
-        assert any("Dubai" in c for c in contents)
+        assert any("Springfield" in c for c in contents)
 
     async def test_graph_count_tracked(self, store, retriever_with_embed):
-        entity_id = store.insert_entity("Marcus", type="person")
+        entity_id = store.insert_entity("Robin", type="person")
         store.insert_fact(
-            "User's best friend is Marcus",
-            embedding=_fake_embed("User's best friend is Marcus"),
+            "User's best friend is Robin",
+            embedding=_fake_embed("User's best friend is Robin"),
             entity_ids=[entity_id],
         )
         store.insert_fact(
-            "Marcus is also a pilot",
+            "Robin is also a librarian",
             embedding=None,
             entity_ids=[entity_id],
         )
-        ctx = await retriever_with_embed.retrieve("User's best friend is Marcus")
+        ctx = await retriever_with_embed.retrieve("User's best friend is Robin")
         # retrieved_from_graph may be 0 or >0 depending on traversal
         assert ctx.retrieved_from_graph >= 0
 
@@ -163,19 +163,19 @@ class TestContextBlock:
         assert _format_context_block([]) == ""
 
     def test_single_fact_in_block(self):
-        facts = [{"content": "User lives in Dubai", "confidence": 0.9}]
+        facts = [{"content": "User lives in Springfield", "confidence": 0.9}]
         text = _format_context_block(facts)
         assert "## Recalled context" in text
-        assert "User lives in Dubai" in text
+        assert "User lives in Springfield" in text
 
     def test_multiple_facts_in_block(self):
         facts = [
-            {"content": "User is a pilot", "confidence": 0.8},
-            {"content": "User lives in Dubai", "confidence": 0.9},
+            {"content": "User is a librarian", "confidence": 0.8},
+            {"content": "User lives in Springfield", "confidence": 0.9},
         ]
         text = _format_context_block(facts)
-        assert "pilot" in text
-        assert "Dubai" in text
+        assert "librarian" in text
+        assert "Springfield" in text
 
     def test_low_confidence_annotated(self):
         facts = [{"content": "User might be a chef", "confidence": 0.3}]
@@ -183,7 +183,7 @@ class TestContextBlock:
         assert "low confidence" in text
 
     def test_high_confidence_not_annotated(self):
-        facts = [{"content": "User lives in Dubai", "confidence": 0.9}]
+        facts = [{"content": "User lives in Springfield", "confidence": 0.9}]
         text = _format_context_block(facts)
         assert "low confidence" not in text
 
@@ -193,7 +193,7 @@ class TestContextBlock:
         assert text == ""
 
     async def test_context_text_in_retrieved_context(self, store, retriever):
-        store.insert_fact("User is a pilot", embedding=None)
+        store.insert_fact("User is a librarian", embedding=None)
         ctx = await retriever.retrieve("what do I do?")
         if ctx.facts:
             assert "## Recalled context" in ctx.text
@@ -212,7 +212,7 @@ class TestPipelineIntegration:
         config = PipelineConfig()
         decomposed = DecomposedPayload(sections=[], format="ollama")
 
-        ctx_block = "## Recalled context\n- User lives in Dubai"
+        ctx_block = "## Recalled context\n- User lives in Springfield"
         lean = compose_lean_payload(
             {"model": "qwen3.5:35b", "messages": [{"role": "user", "content": "hi"}]},
             decomposed,
@@ -251,7 +251,7 @@ class TestPipelineIntegration:
         config = PipelineConfig()
         decomposed = DecomposedPayload(sections=[], format="ollama")
 
-        ctx_block = "## Recalled context\n- User lives in Dubai"
+        ctx_block = "## Recalled context\n- User lives in Springfield"
         lean = compose_lean_payload(
             {"model": "x", "messages": [{"role": "user", "content": "hello"}]},
             decomposed,
@@ -673,31 +673,31 @@ class TestReranker:
     async def test_reranker_reorders_candidates(self, store):
         """Reranker should promote a semantic match over an early-but-weak
         vector candidate. Store has two facts with identical fake
-        embeddings; without rerank the one with 'Dubai' in its content
+        embeddings; without rerank the one with 'Springfield' in its content
         wins by relevance keyword, not vector distance."""
         store.insert_fact(
             "User once visited Paris on holiday",
             embedding=_fake_embed("User once visited Paris on holiday"),
         )
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         retriever = ContextRetriever(
             store, embed_fn=_async_embed, top_k=2,
             reranker=_StubReranker(),
         )
-        ctx = await retriever.retrieve("where do I live Dubai")
+        ctx = await retriever.retrieve("where do I live Springfield")
         contents = [f["content"] for f in ctx.facts]
-        # The Dubai fact scores higher under the stub (more keyword
+        # The Springfield fact scores higher under the stub (more keyword
         # overlap) and must appear first after reranking.
-        assert contents[0].startswith("User lives in Dubai"), contents
+        assert contents[0].startswith("User lives in Springfield"), contents
 
     async def test_reranker_unavailable_is_noop(self, store):
         """An unavailable reranker must not crash or block retrieval."""
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         retriever = ContextRetriever(
             store, embed_fn=_async_embed, top_k=2,
@@ -710,14 +710,14 @@ class TestReranker:
         """rerank_score key should appear on each fact so downstream
         telemetry can log the score."""
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         retriever = ContextRetriever(
             store, embed_fn=_async_embed, top_k=2,
             reranker=_StubReranker(),
         )
-        ctx = await retriever.retrieve("where Dubai")
+        ctx = await retriever.retrieve("where Springfield")
         assert all("rerank_score" in f for f in ctx.facts)
 
 
@@ -730,8 +730,8 @@ class TestRetrieveMulti:
         it in the merged list. Uses three identical sub-queries against
         a single-fact store so each sub-query returns the same id."""
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         retriever = ContextRetriever(
             store, embed_fn=_async_embed, top_k=5,
@@ -761,8 +761,8 @@ class TestRetrieveMulti:
         sub-query so we never regress to an empty context when a single-
         query retrieve would have succeeded."""
         store.insert_fact(
-            "User lives in Dubai",
-            embedding=_fake_embed("User lives in Dubai"),
+            "User lives in Springfield",
+            embedding=_fake_embed("User lives in Springfield"),
         )
         # Stub retriever whose per-sub-query retrieves return nothing,
         # but whose primary retrieve returns the fact.
@@ -770,7 +770,7 @@ class TestRetrieveMulti:
             store, embed_fn=_async_embed, top_k=3,
         )
         # Using a non-matching per_query_top_k isn't the issue — the
-        # store is small enough that any embed_fn returns Dubai. We
+        # store is small enough that any embed_fn returns Springfield. We
         # instead test that retrieve_multi still returns facts for a
         # degenerate sub-query set.
         ctx = await retriever.retrieve_multi(

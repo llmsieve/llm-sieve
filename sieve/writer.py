@@ -91,7 +91,7 @@ _pat("relation_named",
 _pat("relation_possessive",
      rf"\bmy\s+({_RELATION_WORDS})['\u2019]?s?\s+name\s+is\s+([A-Z][A-Za-z '\-]{{1,30}}?)(?:[,\.!?]|$)",
      "objective", "relationship")
-# "My best friend Marcus runs…" — direct apposition: capture name after relation
+# "My best friend Jordan runs…" — direct apposition: capture name after relation
 _pat("relation_apposition",
      rf"\bmy\s+({_RELATION_WORDS})\s+([A-Z][a-z]{{1,20}}(?:\s+[A-Z][a-z]{{1,20}})?)\s+[a-z]",
      "objective", "relationship")
@@ -652,7 +652,7 @@ POLARITY RULE (D41 / children leak):
     "Amy is visiting with the kids"     → Amy has kids, NOT user has kids
     "Sam's mother called"                → Sam has a mother, NOT user's
                                              mother
-    "Marcus and his wife came over"     → Marcus has a wife, NOT user
+    "Jordan and his wife came over"     → Jordan has a wife, NOT user
   Rule of thumb: if a kinship word ("kids", "mother", "wife",
   "children") follows a 3rd-person possessive (her, his, their) OR
   follows another named person with "with" / "and", that relationship
@@ -1571,7 +1571,7 @@ def resolve_conflict(
         )
 
     # Direct contradiction: same leading clause, different tail (e.g. "User
-    # lives in Dubai" → "User lives in Tokyo"; "User likes dogs" → "User likes
+    # lives in Boston" → "User lives in Tokyo"; "User likes dogs" → "User likes
     # cats"). That warrants a supersede — later wins at 0.5.
     if _is_direct_contradiction(new_content, existing_content, owner_names=owner_names):
         return ConflictResolution(
@@ -1735,9 +1735,9 @@ def _is_direct_contradiction(
     DIFFERENT objects.
 
     Examples:
-        "User lives in Sydney" vs "User lives in Melbourne"     → True
+        "User lives in Boston" vs "User lives in Seattle"       → True
         "User likes cats"      vs "User likes dogs"             → True
-        "User is 38 years old" vs "User is 39 years old"        → True
+        "User is 25 years old" vs "User is 26 years old"        → True
         "User is married"      vs "User is separated"           → True
         "User married 9 years" vs "User met at wedding 2014"    → False
         "User is PM at Acme"   vs "User joined Acme 3 yrs ago"  → False

@@ -61,11 +61,11 @@ class TestIdentityPatterns:
         assert any("software engineer" in f.content for f in facts)
 
     def test_im(self):
-        facts = extract_facts_s1("I'm a pilot.")
-        assert any("pilot" in f.content for f in facts)
+        facts = extract_facts_s1("I'm a librarian.")
+        assert any("librarian" in f.content for f in facts)
 
     def test_im_with_article(self):
-        facts = extract_facts_s1("I'm an architect based in Dubai.")
+        facts = extract_facts_s1("I'm an architect based in Springfield.")
         assert any("architect" in f.content for f in facts)
 
     def test_identity_fact_type(self):
@@ -82,10 +82,10 @@ class TestIdentityPatterns:
 
 class TestLocationPatterns:
     def test_live_in(self):
-        facts = extract_facts_s1("I live in Dubai.")
+        facts = extract_facts_s1("I live in Springfield.")
         location = [f for f in facts if f.category == "location"]
         assert location
-        assert "Dubai" in location[0].content
+        assert "Springfield" in location[0].content
 
     def test_based_in(self):
         facts = extract_facts_s1("I'm based in London.")
@@ -105,10 +105,10 @@ class TestLocationPatterns:
         assert location[0].fact_type == "temporal"
 
     def test_entity_name_captured(self):
-        facts = extract_facts_s1("I live in Dubai.")
+        facts = extract_facts_s1("I live in Springfield.")
         location = [f for f in facts if f.category == "location"]
         assert location
-        assert "Dubai" in location[0].entity_names
+        assert "Springfield" in location[0].entity_names
 
 
 class TestOccupationPatterns:
@@ -131,11 +131,11 @@ class TestOccupationPatterns:
 
 class TestRelationshipPatterns:
     def test_partner_is(self):
-        facts = extract_facts_s1("My partner is Madeline.")
+        facts = extract_facts_s1("My partner is Jordan.")
         rel = [f for f in facts if f.category == "relationship"]
         assert rel
-        assert "Madeline" in rel[0].content
-        assert rel[0].related_entity == "Madeline"
+        assert "Jordan" in rel[0].content
+        assert rel[0].related_entity == "Jordan"
         assert rel[0].relation == "partner"
 
     def test_wife(self):
@@ -151,10 +151,10 @@ class TestRelationshipPatterns:
         assert "Emma" in rel[0].content
 
     def test_entity_names_captured(self):
-        facts = extract_facts_s1("My partner is Madeline.")
+        facts = extract_facts_s1("My partner is Jordan.")
         rel = [f for f in facts if f.category == "relationship"]
         assert rel
-        assert "Madeline" in rel[0].entity_names
+        assert "Jordan" in rel[0].entity_names
 
     def test_friend(self):
         facts = extract_facts_s1("My best friend is Kim.")
@@ -221,23 +221,23 @@ class TestRelationshipCaptureBoundaries:
             )
 
     # Regression guards — the GOOD cases must still work
-    def test_partner_is_madeline_still_extracts(self):
-        facts = extract_facts_s1("My partner is Madeline.")
+    def test_partner_is_jordan_still_extracts(self):
+        facts = extract_facts_s1("My partner is Jordan.")
         rel = [f for f in facts if f.category == "relationship"]
         assert rel, "benign case regressed"
-        assert rel[0].related_entity == "Madeline"
+        assert rel[0].related_entity == "Jordan"
 
     def test_wife_named_sarah_still_extracts(self):
         facts = extract_facts_s1("My wife is named Sarah.")
         rel = [f for f in facts if f.category == "relationship"]
         assert rel, "benign case regressed"
 
-    def test_best_friend_marcus_runs_still_extracts(self):
-        """relation_apposition's legitimate use case: 'My best friend Marcus runs ...'"""
-        facts = extract_facts_s1("My best friend Marcus runs every morning.")
+    def test_best_friend_robin_runs_still_extracts(self):
+        """relation_apposition's legitimate use case: 'My best friend Robin runs ...'"""
+        facts = extract_facts_s1("My best friend Robin runs every morning.")
         rel = [f for f in facts if f.category == "relationship"]
         assert rel, "apposition benign case regressed"
-        assert any(f.related_entity and "Marcus" in f.related_entity for f in rel)
+        assert any(f.related_entity and "Robin" in f.related_entity for f in rel)
 
 
 class TestFamilyPatterns:
@@ -263,8 +263,8 @@ class TestAgePatterns:
 
 
 class TestMultipleFactsInOneSentence:
-    def test_pilot_based_in_dubai(self):
-        text = "I'm a pilot based in Dubai, my partner is Madeline."
+    def test_librarian_based_in_springfield(self):
+        text = "I'm a librarian based in Springfield, my partner is Jordan."
         facts = extract_facts_s1(text)
         categories = {f.category for f in facts}
         assert "identity" in categories
@@ -279,8 +279,8 @@ class TestMultipleFactsInOneSentence:
 
 class TestProperNounExtraction:
     def test_single_proper_noun(self):
-        nouns = extract_proper_nouns("My partner is Madeline.")
-        assert "Madeline" in nouns
+        nouns = extract_proper_nouns("My partner is Jordan.")
+        assert "Jordan" in nouns
 
     def test_multi_word_proper_noun(self):
         nouns = extract_proper_nouns("I work at Acme Corporation.")
@@ -299,58 +299,58 @@ class TestProperNounExtraction:
 
 class TestDedup:
     def test_no_duplicate_empty_store(self, store):
-        assert _is_duplicate(store, "User is a pilot", []) is False
+        assert _is_duplicate(store, "User is a librarian", []) is False
 
     def test_exact_match_is_duplicate(self, store):
-        store.insert_fact("User is a pilot", embedding=None)
-        assert _is_duplicate(store, "User is a pilot", []) is True
+        store.insert_fact("User is a librarian", embedding=None)
+        assert _is_duplicate(store, "User is a librarian", []) is True
 
     def test_case_insensitive_match(self, store):
-        store.insert_fact("User is a pilot", embedding=None)
-        assert _is_duplicate(store, "user is a pilot", []) is True
+        store.insert_fact("User is a librarian", embedding=None)
+        assert _is_duplicate(store, "user is a librarian", []) is True
 
     def test_no_duplicate_different_fact(self, store):
-        store.insert_fact("User is a pilot", embedding=None)
-        assert _is_duplicate(store, "User lives in Dubai", []) is False
+        store.insert_fact("User is a librarian", embedding=None)
+        assert _is_duplicate(store, "User lives in Springfield", []) is False
 
 
 # ─── MemoryWriter.process ─────────────────────────────────────────────────────────
 
 class TestMemoryWriterProcess:
     async def test_write_basic_fact(self, writer, store):
-        result = await writer.process("I'm a pilot based in Dubai.")
+        result = await writer.process("I'm a librarian based in Springfield.")
         assert result.facts_written >= 2  # identity + location
 
     async def test_creates_entity(self, writer, store):
-        await writer.process("I live in Dubai.")
-        entity = store.find_entity_by_name("Dubai")
+        await writer.process("I live in Springfield.")
+        entity = store.find_entity_by_name("Springfield")
         assert entity is not None
 
     async def test_creates_relationship(self, writer, store):
-        await writer.process("My partner is Madeline.")
-        result = await writer.process("My partner is Madeline.")
+        await writer.process("My partner is Jordan.")
+        result = await writer.process("My partner is Jordan.")
         # Second time should be dedup'd
         rels = store.conn.execute("SELECT * FROM relationships").fetchall()
         assert len(rels) >= 1
 
     async def test_creates_user_entity_for_relationships(self, writer, store):
-        await writer.process("My partner is Madeline.")
+        await writer.process("My partner is Jordan.")
         user = store.find_entity_by_name("User")
         assert user is not None
 
     async def test_dedup_skips_second_write(self, writer, store):
-        result1 = await writer.process("I'm a pilot.")
-        result2 = await writer.process("I'm a pilot.")
+        result1 = await writer.process("I'm a librarian.")
+        result2 = await writer.process("I'm a librarian.")
         # Second run: all facts should be skipped (exact text match)
         assert result2.facts_skipped >= 1
         assert result2.facts_written == 0
 
     async def test_session_id_returned(self, writer):
-        result = await writer.process("I live in Dubai.")
+        result = await writer.process("I live in Springfield.")
         assert result.session_id
 
     async def test_custom_session_id(self, writer):
-        result = await writer.process("I live in Dubai.", session_id="sess-123")
+        result = await writer.process("I live in Springfield.", session_id="sess-123")
         assert result.session_id == "sess-123"
 
     async def test_empty_text_returns_zero(self, writer):
@@ -365,36 +365,36 @@ class TestMemoryWriterProcess:
     async def test_full_pilot_sentence(self, writer, store):
         """The checkpoint sentence."""
         result = await writer.process(
-            "I'm a pilot based in Dubai, my partner is Madeline, I have two children."
+            "I'm a librarian based in Springfield, my partner is Jordan, I have two children."
         )
         assert result.facts_written >= 3
 
         # Verify specific content
         facts = store.get_facts()
         contents = [f["content"] for f in facts]
-        assert any("pilot" in c for c in contents)
-        assert any("Dubai" in c for c in contents)
-        assert any("Madeline" in c for c in contents)
+        assert any("librarian" in c for c in contents)
+        assert any("Springfield" in c for c in contents)
+        assert any("Jordan" in c for c in contents)
 
     async def test_entities_written_count(self, writer, store):
-        result = await writer.process("My partner is Madeline.")
-        # Should create: Madeline + User entities
+        result = await writer.process("My partner is Jordan.")
+        # Should create: Jordan + User entities
         assert result.entities_written >= 1
 
     async def test_confidence_scores_set(self, writer, store):
-        await writer.process("I live in Dubai.")
+        await writer.process("I live in Springfield.")
         facts = store.get_facts()
         for f in facts:
             assert 0.0 < f["confidence"] <= 1.0
 
     async def test_source_is_writer_s1(self, writer, store):
-        await writer.process("I live in Dubai.")
+        await writer.process("I live in Springfield.")
         facts = store.get_facts()
         assert all(f["source"] == "writer_s1" for f in facts)
 
     async def test_with_embeddings(self, writer_with_embeddings, store):
         """Writer with embeddings should store vectors."""
-        result = await writer_with_embeddings.process("I live in Dubai.")
+        result = await writer_with_embeddings.process("I live in Springfield.")
         assert result.facts_written >= 1
         # Check that embedding was stored
         facts = store.get_facts()
@@ -424,7 +424,7 @@ class TestWriteResultStageCounts:
     async def test_stage1_facts_matches_regex_extraction(self, writer):
         """result.stage1_facts equals the count of S1 regex candidates."""
         # This input triggers multiple distinct S1 patterns
-        text = "I'm a pilot. I live in Dubai."
+        text = "I'm a librarian. I live in Springfield."
         expected = len(extract_facts_s1(text))
         assert expected >= 2, "sanity: need multiple S1 candidates for this test"
 
@@ -438,7 +438,7 @@ class TestWriteResultStageCounts:
     async def test_stage2_facts_zero_when_s2_disabled(self, store):
         """With stage2_enabled=False, stage2 never runs, count stays 0."""
         w = MemoryWriter(store, embed_fn=None, stage2_enabled=False)
-        result = await w.process("I'm a pilot. I live in Dubai.")
+        result = await w.process("I'm a librarian. I live in Springfield.")
         assert result.stage2_facts == 0
         assert result.stage2_invoked is False
 
@@ -457,12 +457,12 @@ class TestWriteResultStageCounts:
 
     async def test_conflicts_detected_zero_when_no_ghosts(self, writer):
         """No ghost-validator drops on clean S1-only input."""
-        result = await writer.process("I live in Dubai.")
+        result = await writer.process("I live in Springfield.")
         assert result.conflicts_detected == 0
 
     async def test_supersessions_zero_on_first_write(self, writer):
         """First write of a fact can't supersede anything."""
-        result = await writer.process("I live in Dubai.")
+        result = await writer.process("I live in Springfield.")
         assert result.supersessions == 0
 
 

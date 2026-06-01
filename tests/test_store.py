@@ -85,7 +85,7 @@ def test_is_initialized_false_on_empty_db(tmp_path):
 
 def test_db_encrypted_unreadable_without_passphrase(store, tmp_db):
     """The database file should be unreadable with a standard sqlite3 connection."""
-    store.insert_fact("User lives in Dubai", embedding=[1.0, 0.0, 0.0, 0.0])
+    store.insert_fact("User lives in Springfield", embedding=[1.0, 0.0, 0.0, 0.0])
     store.close()
 
     # Try reading with wrong passphrase
@@ -98,7 +98,7 @@ def test_db_encrypted_unreadable_without_passphrase(store, tmp_db):
 
 def test_db_readable_with_correct_passphrase(store, tmp_db):
     """The database should be readable with the correct passphrase."""
-    store.insert_fact("User lives in Dubai", embedding=[1.0, 0.0, 0.0, 0.0])
+    store.insert_fact("User lives in Springfield", embedding=[1.0, 0.0, 0.0, 0.0])
     store.close()
 
     conn = sqlcipher3.connect(str(tmp_db))
@@ -110,11 +110,11 @@ def test_db_readable_with_correct_passphrase(store, tmp_db):
 
 def test_db_file_not_plaintext(store, tmp_db):
     """Raw file bytes should not contain plaintext content."""
-    store.insert_fact("User lives in Dubai", embedding=[1.0, 0.0, 0.0, 0.0])
+    store.insert_fact("User lives in Springfield", embedding=[1.0, 0.0, 0.0, 0.0])
     store.close()
 
     raw = tmp_db.read_bytes()
-    assert b"User lives in Dubai" not in raw
+    assert b"User lives in Springfield" not in raw
     assert b"SQLite" not in raw  # encrypted header
 
 
@@ -149,7 +149,7 @@ def test_passphrase_auto_generated(tmp_path):
 
 def test_insert_and_get_fact(store):
     fact_id = store.insert_fact(
-        "User lives in Dubai",
+        "User lives in Springfield",
         embedding=[1.0, 0.0, 0.0, 0.0],
         entity_ids=["entity1"],
         source="conversation",
@@ -159,7 +159,7 @@ def test_insert_and_get_fact(store):
 
     fact = store.get_fact(fact_id)
     assert fact is not None
-    assert fact["content"] == "User lives in Dubai"
+    assert fact["content"] == "User lives in Springfield"
     assert fact["confidence"] == 0.9
     assert fact["fact_type"] == "objective"
     assert fact["status"] == "current"
@@ -195,17 +195,17 @@ def _normalize(vec: list[float]) -> list[float]:
 
 def test_vector_search_returns_closest(store):
     """Insert several facts with known vectors, query with a similar vector."""
-    store.insert_fact("User lives in Dubai", embedding=_normalize([1.0, 0.0, 0.0, 0.0]))
+    store.insert_fact("User lives in Springfield", embedding=_normalize([1.0, 0.0, 0.0, 0.0]))
     store.insert_fact("User works at Acme", embedding=_normalize([0.0, 1.0, 0.0, 0.0]))
     store.insert_fact("User likes coffee", embedding=_normalize([0.0, 0.0, 1.0, 0.0]))
 
-    # Query close to "Dubai" vector
+    # Query close to "Springfield" vector
     results = store.search_facts_by_vector(
         query_embedding=_normalize([0.9, 0.1, 0.0, 0.0]),
         limit=2,
     )
     assert len(results) == 2
-    assert results[0]["content"] == "User lives in Dubai"
+    assert results[0]["content"] == "User lives in Springfield"
     assert "distance" in results[0]
     assert results[0]["distance"] < results[1]["distance"]
 
@@ -236,18 +236,18 @@ def test_vector_search_empty_store(store):
 
 
 def test_insert_and_get_entity(store):
-    entity_id = store.insert_entity("Dubai", type="place", description="City in UAE")
+    entity_id = store.insert_entity("Springfield", type="place", description="City in UAE")
     entity = store.get_entity(entity_id)
     assert entity is not None
-    assert entity["name"] == "Dubai"
+    assert entity["name"] == "Springfield"
     assert entity["type"] == "place"
 
 
 def test_find_entity_by_name(store):
-    store.insert_entity("Dubai", type="place")
-    entity = store.find_entity_by_name("Dubai")
+    store.insert_entity("Springfield", type="place")
+    entity = store.find_entity_by_name("Springfield")
     assert entity is not None
-    assert entity["name"] == "Dubai"
+    assert entity["name"] == "Springfield"
 
 
 def test_find_entity_by_name_not_found(store):
@@ -259,26 +259,26 @@ def test_find_entity_by_name_not_found(store):
 
 def test_relationships_and_graph_traversal(store):
     user_id = store.insert_entity("User", type="person")
-    dubai_id = store.insert_entity("Dubai", type="place")
+    springfield_id = store.insert_entity("Springfield", type="place")
     acme_id = store.insert_entity("Acme Corp", type="project")
 
-    store.insert_relationship(user_id, "lives_in", dubai_id)
+    store.insert_relationship(user_id, "lives_in", springfield_id)
     store.insert_relationship(user_id, "works_at", acme_id)
 
     related = store.get_related_entities(user_id)
     assert len(related) == 2
     names = {e["name"] for e in related}
-    assert names == {"Dubai", "Acme Corp"}
+    assert names == {"Springfield", "Acme Corp"}
 
 
 def test_graph_traversal_bidirectional(store):
     """Traversal should work from either direction."""
     user_id = store.insert_entity("User", type="person")
-    dubai_id = store.insert_entity("Dubai", type="place")
-    store.insert_relationship(user_id, "lives_in", dubai_id)
+    springfield_id = store.insert_entity("Springfield", type="place")
+    store.insert_relationship(user_id, "lives_in", springfield_id)
 
-    # From Dubai side, should find User
-    related = store.get_related_entities(dubai_id)
+    # From Springfield side, should find User
+    related = store.get_related_entities(springfield_id)
     assert len(related) == 1
     assert related[0]["name"] == "User"
 
@@ -288,7 +288,7 @@ def test_graph_traversal_bidirectional(store):
 
 def test_insert_episode(store):
     ep_id = store.insert_episode(
-        "User asked about weather in Dubai",
+        "User asked about weather in Springfield",
         entities_involved=["entity1"],
         decisions_made=["provided forecast"],
         session_id="session1",
