@@ -64,6 +64,12 @@ class InstallPlan:
     model: str
     autostart: bool
     start_now: bool
+    # Writer configuration. writer_model "auto" means "use the same model
+    # as the target LLM for the writer step too" (the default — works for
+    # every realistic setup except thinking models). Users running a
+    # thinking model as their target can choose a separate small writer
+    # to keep extraction snappy.
+    writer_model: str = "auto"
 
     def redacted(self) -> "InstallPlan":
         """Copy safe to display — redacts any API key to '…'."""
@@ -75,6 +81,7 @@ class InstallPlan:
             model=self.model,
             autostart=self.autostart,
             start_now=self.start_now,
+            writer_model=self.writer_model,
         )
 
 
@@ -277,6 +284,17 @@ def _main_flow(
             console, provider_url, provider_api_key,
         )
 
+    # ── Step 2.5: writer choice ───────────────────────────────
+    # Sieve's compression step ("the writer") needs an LLM to read each
+    # turn and extract atomic facts. By default it uses the same model
+    # the user just picked. For thinking models, we warn and let them
+    # choose differently.
+    if no_input:
+        # Auto-mode: writer = auto (same as target). Skip the question.
+        writer_model = "auto"
+    else:
+        writer_model = _pick_writer(console, chosen_model)
+
     # ── Step 3: autostart ──────────────────────────────────────
     autostart = _pick_autostart(console, no_input=no_input)
 
@@ -292,6 +310,7 @@ def _main_flow(
         model=chosen_model,
         autostart=autostart,
         start_now=start_now,
+        writer_model=writer_model,
     )
 
     # ── Final confirm (skipped on --no-input) ──────────────────
@@ -704,6 +723,97 @@ def _default_model_for(url: str, api_key: str | None) -> str:
     )
 
 
+# ── Step 2.5: writer choice ──────────────────────────────────────────
+
+
+# Model name fragments that suggest reasoning/thinking models. Used only
+# as a heuristic — if a match is found we *warn*, we don't block. Users
+# who know better can override. False-positives are cheap (one extra
+# warning); false-negatives mean an unwarned slow writer for one user.
+_THINKING_MODEL_FRAGMENTS = (
+    # DeepSeek
+    "deepseek-r1", "deepseek-reasoner",
+    # Qwen reasoning variants
+    "qwen3-thinking", "qwen-thinking", "qwq",
+    # OpenAI reasoning family
+    "o1", "o3", "o4-mini",
+    # Claude extended-thinking variants — these don't always advertise
+    # in the name, but where they do:
+    "thinking", "reasoning",
+    # gpt-oss-* models in Ollama-cloud emit reasoning traces by default
+    "gpt-oss",
+    # Kimi reasoning
+    "kimi-k2-thinking", "kimi-k2.6",
+)
+
+
+def _looks_like_thinking_model(model_name: str) -> bool:
+    """Heuristic — does the model name suggest a reasoning/thinking model?"""
+    low = model_name.lower()
+    return any(frag in low for frag in _THINKING_MODEL_FRAGMENTS)
+
+
+def _pick_writer(console, target_model: str) -> str:
+    """Ask the user which model to use for the writer (extraction) step.
+
+    Returns the writer model name. The literal string "auto" means
+    "use the same model as the target". For thinking models we warn
+    first and recommend a separate small writer.
+    """
+    from sieve._wizard_helpers import NumberedChoice, pick_numbered
+
+    console.print()
+    console.print("[bold]About Sieve's writer[/]")
+    console.print(
+        "[dim]Sieve compresses each conversation turn by reading it and "
+        "extracting just the key facts. This 'writer' step needs an LLM. "
+        "By default it uses the same model you just configured.[/]"
+    )
+
+    is_thinking = _looks_like_thinking_model(target_model)
+    if is_thinking:
+        console.print()
+        console.print(
+            f"[yellow]⚠ {target_model} looks like a reasoning/thinking model.[/]"
+        )
+        console.print(
+            "[dim]The writer step will be slow on these models (they generate "
+            "a reasoning trace before the JSON output). Recommended: install "
+            "a small non-thinking model alongside (e.g. "
+            "[cyan]ollama pull qwen2.5:3b[/]) and pick it as the writer.[/]"
+        )
+
+    choices = [
+        NumberedChoice(
+            label=f"Use {target_model} for the writer (same as target)",
+            value="auto",
+            help="Simplest setup. Works perfectly for non-thinking models.",
+        ),
+        NumberedChoice(
+            label="Use a different model for the writer",
+            value="separate",
+            help="Recommended for thinking models, or if you want to dedicate a small fast model to extraction.",
+        ),
+    ]
+    pick = pick_numbered(
+        "Writer choice:",
+        choices,
+        default=("separate" if is_thinking else "auto"),
+        console=console,
+    )
+
+    if pick == "auto":
+        return "auto"
+
+    # Separate writer: prompt for model name
+    writer = click.prompt(
+        "Writer model name (e.g. qwen2.5:3b, llama3.2:1b, claude-3-5-haiku)",
+        type=str,
+        default="qwen2.5:3b",
+    ).strip()
+    return writer or "auto"
+
+
 # ── Step 3: autostart ────────────────────────────────────────────────
 
 
@@ -768,8 +878,12 @@ def _render_plan_preview(console, plan: InstallPlan) -> None:
     if r.provider_api_key:
         lines.append(f"[bold]API key:[/]    [cyan]{r.provider_api_key}[/] "
                      "[dim](saved to ~/.sieve/sieve.yaml, file mode 600)[/]")
+    lines.append(f"[bold]Model:[/]      [cyan]{r.model}[/]")
+    if r.writer_model and r.writer_model != "auto":
+        lines.append(f"[bold]Writer:[/]     [cyan]{r.writer_model}[/] [dim](dedicated)[/]")
+    else:
+        lines.append(f"[bold]Writer:[/]     [dim]uses {r.model} (same as target)[/]")
     lines.extend([
-        f"[bold]Model:[/]      [cyan]{r.model}[/]",
         f"[bold]Autostart:[/]  [cyan]{'enabled' if r.autostart else 'disabled'}[/]",
         f"[bold]Start now:[/]  [cyan]{'yes' if r.start_now else 'no'}[/]",
     ])
@@ -853,6 +967,20 @@ def _write_yaml(plan: InstallPlan) -> None:
     ]
     if plan.provider_api_key:
         provider_block.append(f"  api_key: {plan.provider_api_key}")
+
+    # Writer block — only emit when the user chose a separate writer.
+    # When writer_model == "auto" the config dataclass default kicks
+    # in and the writer routes to provider.default_model. Explicit
+    # in the YAML keeps the file readable for whichever choice
+    # was made.
+    writer_block = []
+    if plan.writer_model and plan.writer_model != "auto":
+        writer_block = [
+            "writer:",
+            f"  model: {plan.writer_model}",
+            "",
+        ]
+
     yaml_text = "\n".join([
         "# Sieve configuration — written by sieve-install.",
         "# See https://llmsieve.dev for the full schema.",
@@ -863,6 +991,7 @@ def _write_yaml(plan: InstallPlan) -> None:
         "",
         *provider_block,
         "",
+        *writer_block,
         "embeddings:",
         "  provider: fastembed",
         "",
@@ -934,8 +1063,10 @@ def _render_ready_panel(console, plan: InstallPlan) -> None:
     if r.provider_api_key:
         lines.append(f"[bold]API key[/]    [dim]saved to "
                      "~/.sieve/sieve.yaml (mode 600)[/]")
+    lines.append(f"[bold]Model[/]      [cyan]{r.model}[/]")
+    if r.writer_model and r.writer_model != "auto":
+        lines.append(f"[bold]Writer[/]     [cyan]{r.writer_model}[/] [dim](dedicated)[/]")
     lines.extend([
-        f"[bold]Model[/]      [cyan]{r.model}[/]",
         f"[bold]Running[/]    {running_str}  "
         f"[dim](point your agent at {proxy_url})[/]",
         f"[bold]Autostart[/]  [cyan]{as_state}[/]",
