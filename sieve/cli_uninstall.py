@@ -40,8 +40,9 @@ def wipe_sieve_dir(sieve_dir: Path | None = None) -> None:
 
 
 def pip_uninstall_hint() -> str:
-    """Message explaining how to remove the pip-installed package."""
+    """Message explaining how to remove the installed package."""
     return (
-        "To remove the Sieve package itself, run:\n"
-        "  pip uninstall llm-sieve\n"
+        "To remove the Sieve package itself, run one of:\n"
+        "  pipx uninstall llm-sieve     (if installed via pipx — recommended)\n"
+        "  pip uninstall llm-sieve      (if installed via pip into a venv)\n"
     )
