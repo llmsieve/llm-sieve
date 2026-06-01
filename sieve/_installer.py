@@ -926,16 +926,43 @@ def _apply_plan(
     _init_store()
     console.print(" [green]✓[/]")
 
-    # 4. Autostart (if requested). Has its own rollback.
+    # 4. Autostart — honor the user's plan choice (P3 fix).
+    # If they said yes: enable.
+    # If they said no AND autostart is currently enabled from a previous
+    # install: disable it so the ready panel reflects what they asked for.
+    # Otherwise (no, not currently enabled): no-op silently.
+    from sieve._autostart import (
+        enable_autostart, disable_autostart, autostart_status,
+    )
     if plan.autostart:
         console.print("[dim]Enabling autostart on boot…[/]", end="")
-        from sieve._autostart import enable_autostart, disable_autostart
         ok, msg = enable_autostart()
         if ok:
             console.print(" [green]✓[/]")
             rollback.append(lambda: disable_autostart())
         else:
             console.print(f" [yellow]skipped — {msg}[/]")
+    else:
+        # Check if a previous install left autostart enabled — if so,
+        # disable it to match the user's current "no" answer.
+        try:
+            current = autostart_status()
+        except Exception:
+            current = "unknown"
+        if current == "enabled":
+            console.print(
+                "[dim]Disabling autostart "
+                "(was enabled from a previous install)…[/]",
+                end="",
+            )
+            try:
+                ok, msg = disable_autostart()
+                if ok:
+                    console.print(" [green]✓[/]")
+                else:
+                    console.print(f" [yellow]skipped — {msg}[/]")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f" [yellow]skipped — {exc}[/]")
 
     # 5. Start now (if requested).
     if plan.start_now:

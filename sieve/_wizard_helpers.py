@@ -191,17 +191,26 @@ def pick_numbered(
 ) -> str:
     """Render a numbered picker and return the chosen value.
 
-    ``default`` is the value that will be used when the user just hits
-    enter. It does NOT need to match one of the choices' values — if
-    it doesn't, it's silently appended as "(custom)".
+    ``default`` controls Enter-key behaviour:
+    - If ``default`` is given and matches a choice value, that value is
+      returned on empty input. Marked with ``*`` and ``(enter = default: X)``.
+    - If ``default`` is given but does NOT match a choice value, it's
+      silently appended as an extra entry so Enter still works.
+    - If ``default`` is None and the picker has items, Enter accepts the
+      FIRST item. The hint reads ``(enter = first)``. This avoids the
+      "Choose: <Enter> → 'Enter a number.'" papercut where users instinct-
+      ively press Enter expecting a default.
 
     When ``allow_free_text`` is True, an extra numbered option is added
     at the end: "N. Other (type a value)". Selecting it re-prompts with
     ``free_text_prompt`` and accepts any string.
 
-    Input loop never exits silently: on unparseable input it re-prompts
-    with the available range. On empty input, returns ``default`` if
-    provided; otherwise re-prompts.
+    On 3 consecutive bad-input attempts the picker raises a RuntimeError
+    with an actionable message so the installer's "Install failed: …"
+    line is no longer empty.
+
+    After a valid pick the picker echoes "Selected: <label>" so the user
+    has visual confirmation before the next screen.
     """
     if console is None:
         from rich.console import Console
@@ -219,6 +228,19 @@ def pick_numbered(
     if allow_free_text:
         free_text_index = len(items) + 1
 
+    # Determine the effective Enter-key default (P1 fix).
+    # If the caller didn't specify a default and we have items, Enter
+    # accepts the FIRST item rather than rejecting.
+    enter_picks_first = default is None and items
+    effective_default_value = None
+    effective_default_label = None
+    if default is not None:
+        effective_default_value = default
+        effective_default_label = f"default: {default}"
+    elif enter_picks_first:
+        effective_default_value = items[0].value
+        effective_default_label = f"first — {items[0].label}"
+
     # Render
     console.print()
     console.print(f"[bold]{prompt}[/]")
@@ -226,15 +248,20 @@ def pick_numbered(
         marker = "  "
         if default is not None and c.value == default:
             marker = "[dim]*[/] "
+        elif enter_picks_first and i == 1:
+            marker = "[dim]*[/] "
         console.print(f"  {marker}[cyan]{i:>2}.[/] {c.label}")
         if c.help:
             console.print(f"        [dim]{c.help}[/]")
     if free_text_index is not None:
         console.print(f"  [cyan]{free_text_index:>2}.[/] Other — type a value")
-    if default is not None:
-        console.print(f"[dim]  (enter = default: {default})[/]")
+    if effective_default_label is not None:
+        console.print(f"[dim]  (enter = {effective_default_label})[/]")
 
     import click
+    max_choice = len(items) + (1 if free_text_index else 0)
+    bad_attempts = 0
+    MAX_BAD = 3
     while True:
         raw = click.prompt(
             "Choose",
@@ -243,27 +270,58 @@ def pick_numbered(
             show_default=False,
         ).strip()
         if not raw:
-            if default is not None:
-                return default
+            if effective_default_value is not None:
+                # P4 fix: echo what Enter resolved to
+                if enter_picks_first:
+                    console.print(f"[dim]  Selected: {items[0].label}[/]")
+                return effective_default_value
+            bad_attempts += 1
             console.print("[yellow]Enter a number.[/]")
+            if bad_attempts >= MAX_BAD:
+                raise RuntimeError(
+                    f"No input given for prompt {prompt!r} after "
+                    f"{MAX_BAD} attempts."
+                )
             continue
         try:
             idx = int(raw)
         except ValueError:
-            console.print(f"[yellow]'{raw}' isn't a number; try 1–{len(items) + (1 if free_text_index else 0)}.[/]")
+            bad_attempts += 1
+            console.print(
+                f"[yellow]'{raw}' isn't a number; try 1–{max_choice}.[/]"
+            )
+            if bad_attempts >= MAX_BAD:
+                raise RuntimeError(
+                    f"Invalid input {raw!r} for prompt {prompt!r} after "
+                    f"{MAX_BAD} attempts. Re-run sieve-install and pick "
+                    f"a number 1–{max_choice}."
+                )
             continue
         if free_text_index is not None and idx == free_text_index:
             value = click.prompt(free_text_prompt, type=str, default="").strip()
             if not value:
+                bad_attempts += 1
                 console.print("[yellow]Empty value — try again.[/]")
+                if bad_attempts >= MAX_BAD:
+                    raise RuntimeError(
+                        f"Empty custom value for {prompt!r} after "
+                        f"{MAX_BAD} attempts."
+                    )
                 continue
+            console.print(f"[dim]  Selected: {value}[/]")
             return value
         if 1 <= idx <= len(items):
+            # P4 fix: echo what was picked
+            console.print(f"[dim]  Selected: {items[idx - 1].label}[/]")
             return items[idx - 1].value
+        bad_attempts += 1
         console.print(
-            f"[yellow]{idx} is out of range; try 1–"
-            f"{len(items) + (1 if free_text_index else 0)}.[/]"
+            f"[yellow]{idx} is out of range; try 1–{max_choice}.[/]"
         )
+        if bad_attempts >= MAX_BAD:
+            raise RuntimeError(
+                f"Out-of-range pick for {prompt!r} after {MAX_BAD} attempts."
+            )
 
 
 def pick_model(
