@@ -153,6 +153,12 @@ class WriterConfig:
     fallback_model: str = "auto"
     num_ctx: int = 4096
     ghost_validator_enabled: bool = True
+    # Skip the S2 LLM call entirely on turns that can't possibly contain
+    # extractable facts (filler, social greetings, questions with no
+    # proper-noun anchors). Measured to skip ~70% of turns in
+    # representative traffic with no quality loss. See
+    # WRITER_LATENCY_BATTERY_RESULTS.md for the methodology.
+    skip_empty_turns: bool = True
 
 
 @dataclass
@@ -459,6 +465,7 @@ def _build_config(raw: dict) -> RecallConfig:
         fallback_model=writer_raw.get("fallback_model", "auto"),
         num_ctx=int(writer_raw.get("num_ctx", 4096)),
         ghost_validator_enabled=bool(writer_raw.get("ghost_validator_enabled", True)),
+        skip_empty_turns=bool(writer_raw.get("skip_empty_turns", True)),
     )
 
     retrieval_raw = raw.get("retrieval") or {}

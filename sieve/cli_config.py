@@ -61,6 +61,7 @@ _SETTABLE: dict[str, tuple[type, set | None]] = {
     "writer.fallback_model": (str, None),
     "writer.num_ctx": (int, None),
     "writer.ghost_validator_enabled": (bool, None),
+    "writer.skip_empty_turns": (bool, None),
 
     "retrieval.temporal_dedup": (bool, None),
     "retrieval.reranker_enabled": (bool, None),

@@ -1371,8 +1371,24 @@ def _strip_markdown_fences(text: str) -> str:
     return text
 
 
+def _strip_think_tags(text: str) -> str:
+    """Strip <think>...</think> blocks emitted by reasoning models.
+
+    Mirrors the same pattern used in _grader.py. Required because some
+    providers (notably gpt-oss-* via Ollama cloud, and some self-hosted
+    setups) emit reasoning traces even when the request body sets
+    ``think: false``. Without this strip, the writer's JSON parse
+    fails on the leading <think> token and the extraction is silently
+    dropped — degrading sieve's behaviour with no visible error.
+    """
+    if "<think>" in text and "</think>" in text:
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return text
+
+
 def _parse_s2_response(content: str, original_text: str) -> list[ExtractedFact] | None:
     """Parse and validate S2 LLM JSON response via Pydantic. Returns None on failure."""
+    content = _strip_think_tags(content)
     content = _strip_markdown_fences(content)
     try:
         parsed = json.loads(content)
