@@ -69,3 +69,28 @@ line-length = 100
 
 [tool.hatch.build.targets.wheel]
 packages = ["sieve"]
+
+[tool.hatch.build.targets.sdist]
+# Keep the sdist lean: source, install-time configs, and the standard
+# meta files. Exclude testing caches, large branding GIFs (kept in
+# the repo for README rendering on GitHub, not needed on PyPI), and
+# evaluation artefacts.
+include = [
+    "/sieve",
+    "/tests",
+    "/sieve.example.yaml",
+    "/sieve.test.example.yaml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/PATENT_NOTICE",
+    "/SECURITY.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/pyproject.toml",
+]
+exclude = [
+    "**/.hypothesis",
+    "**/__pycache__",
+    "**/*.pyc",
+]

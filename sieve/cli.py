@@ -45,8 +45,8 @@ def _setup_logging(verbose: bool) -> None:
 
 
 POST_INSTALL_HINT = (
-    "Sieve installed successfully! Run [cyan]sieve init[/] to get started, "
-    "or [cyan]sieve init --wizard[/] for guided setup."
+    "Sieve installed successfully! Run [cyan]sieve-install[/] to detect "
+    "your LLM, pick a model, and initialise the encrypted store."
 )
 
 
@@ -56,9 +56,13 @@ POST_INSTALL_HINT = (
 def cli(ctx: click.Context):
     """Sieve — Transparent context reduction for LLMs.
 
-    After install, run `sieve init` (or `sieve init --wizard`) to create
-    the configuration file, download the embedding model, and initialise
-    the encrypted memory store. Then `sieve start` to run the proxy.
+    After installing the package, run `sieve-install` to detect your LLM
+    provider, pick a model, download the embedding model, and initialise
+    the encrypted memory store. Then point your agent at the proxy URL
+    that the installer prints.
+
+    For day-to-day management, run `sieve` (with no arguments) to open
+    the interactive menu, or use the subcommands listed below.
     """
     # No subcommand.
     #   - TTY: launch the top-level wizard so users have a
