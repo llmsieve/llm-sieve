@@ -334,7 +334,8 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
         await proxy_client.stop()
         logger.info("Sieve proxy stopped")
 
-    app = FastAPI(title="Sieve", version="0.1.0", lifespan=lifespan)
+    from sieve import __version__ as _sieve_version
+    app = FastAPI(title="Sieve", version=_sieve_version, lifespan=lifespan)
     app.state.config = config
     app.state.proxy_client = proxy_client
     app.state.memory_store = memory_store
@@ -391,7 +392,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
     @app.get("/sieve/health")
     async def health():
         store_ready = memory_store._conn is not None and memory_store.is_initialized()
-        return {"status": "ok", "version": "0.1.0", "store": store_ready}
+        return {"status": "ok", "version": _sieve_version, "store": store_ready}
 
     @app.post("/sieve/validation/next")
     async def validation_register_next(request: Request):

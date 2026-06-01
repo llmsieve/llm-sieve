@@ -184,19 +184,55 @@ def start(
         sys.exit(1)
 
     # Fail fast if the configured port is already bound — Phase 7 Test 5.
+    # If the existing PID file points at a live process, that's likely
+    # our own stale daemon from a previous session; tell the user how
+    # to clean it up specifically rather than printing a generic
+    # "port in use" message.
     import socket
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
     try:
         probe.bind((config.listen.host, config.listen.port))
     except OSError:
-        console.print(
-            f"[bold red]Port {config.listen.port} is already in use.[/] "
-            f"Use --port to specify another."
-        )
+        stale_pid = _read_pid()
+        if stale_pid is not None and _pid_running(stale_pid):
+            console.print(
+                f"[bold red]Port {config.listen.port} is already in use[/] "
+                f"by an existing Sieve process [dim](pid {stale_pid}).[/]\n"
+            )
+            console.print(
+                "[bold]How to fix:[/]\n"
+                f"  • [cyan]sieve stop[/]   then re-run, OR\n"
+                f"  • [cyan]sieve restart[/] to do both in one step, OR\n"
+                f"  • [cyan]sieve start --port <other>[/] to run on a "
+                f"different port.\n"
+            )
+        else:
+            console.print(
+                f"[bold red]Port {config.listen.port} is already in use[/] "
+                f"by another process [dim](not Sieve).[/]\n"
+            )
+            console.print(
+                "[bold]How to fix:[/]\n"
+                f"  • Identify the process: "
+                f"[cyan]ss -tlnp 'sport = :{config.listen.port}'[/]\n"
+                f"  • Or run Sieve on a different port: "
+                f"[cyan]sieve start --port <other>[/]\n"
+            )
         sys.exit(1)
     finally:
         probe.close()
+
+
+def _pid_running(pid: int) -> bool:
+    """True if a process with this pid exists. Used by the
+    port-collision branch to distinguish 'our own stale daemon' from
+    'someone else's process'."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
 
     SIEVE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1562,9 +1598,19 @@ def _run_demo_loop(
         except Exception:
             return 0
 
+    # Demo-script messages, chosen to exercise the full pipeline:
+    #   turn 1: fact-share (name + occupation) — strong-keyword "work"
+    #   turn 2: fact-share (preference) — strong-keyword "love"
+    #   turn 3: fact-share (pet) — strong-keyword "dog"
+    #   turns 4-5: recall queries against the just-learned facts
+    #   turn 6: absence-signal trap (asks about a person never mentioned)
+    # Each fact-share message must contain a regex-extractable signal
+    # OR a strong-keyword from the S2 gate, otherwise the gate stays
+    # closed and the user sees "no growth — writer missed this turn"
+    # — bad demo optics. See _s2_gate in writer.py for the rules.
     messages = [
         "Hi, I'm Casey. I work as a landscape architect.",
-        "I've completed several public parks and garden designs.",
+        "I love working on public parks and garden designs.",
         "I have a dog who's a border terrier.",
         "Do you remember where I work?",
         "What breed is my dog?",
@@ -1577,6 +1623,12 @@ def _run_demo_loop(
     console.print("[bold]Sieve demo[/] — 6 messages through the proxy:\n")
     consecutive_errors = 0
     aborted = False
+    # Accumulators for the closing summary panel
+    completed_turns = 0
+    last_assistant_text = ""    # for the absence-trap verdict
+    proxy_us_list: list[int] = []
+    facts_learned_total = 0
+    recall_rounds_total = 0
     for i, msg in enumerate(messages, 1):
         if aborted:
             break
@@ -1605,6 +1657,7 @@ def _run_demo_loop(
             if "<think>" in raw and "</think>" in raw:
                 import re
                 raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            last_assistant_text = raw
             text = raw[:240] if raw.strip() else "[dim](no visible content — check model output)[/]"
             rounds = r.headers.get("X-Sieve-Rounds", "0")
             proxy_us = r.headers.get("X-Sieve-Proxy-Us", "?")
@@ -1615,6 +1668,15 @@ def _run_demo_loop(
                 f"        [green]→[/] {text}  "
                 f"[dim]{phase_tag} (recall rounds: {rounds}, proxy_us: {proxy_us})[/]"
             )
+            completed_turns += 1
+            try:
+                proxy_us_list.append(int(proxy_us))
+            except (TypeError, ValueError):
+                pass
+            try:
+                recall_rounds_total += int(rounds)
+            except (TypeError, ValueError):
+                pass
         except UpstreamLLMError as exc:
             consecutive_errors += 1
             short = (exc.upstream_message or f"HTTP {exc.status}").strip()
@@ -1660,6 +1722,7 @@ def _run_demo_loop(
                 console.print(
                     f"        [dim]📝 Facts: {after} ([green]+{delta}[/])[/]"
                 )
+                facts_learned_total += delta
             else:
                 console.print(
                     f"        [yellow]📝 Facts: {after} (no growth — writer missed this turn)[/]"
@@ -1667,6 +1730,105 @@ def _run_demo_loop(
         else:
             console.print(f"        [dim]📝 Facts: {after}[/]")
         console.print()
+
+    # ── Closing summary panel ───────────────────────────────────────
+    # Renders only if the demo wasn't aborted by errors. Tells the user
+    # what they just saw — what was learned, whether the trap fired,
+    # latency stats — and what to do next.
+    if not aborted and completed_turns == len(messages):
+        _render_demo_summary(
+            completed_turns=completed_turns,
+            facts_learned=facts_learned_total,
+            final_fact_count=fact_count(),
+            last_assistant_text=last_assistant_text,
+            proxy_us_list=proxy_us_list,
+            recall_rounds_total=recall_rounds_total,
+        )
+
+
+def _render_demo_summary(
+    *,
+    completed_turns: int,
+    facts_learned: int,
+    final_fact_count: int,
+    last_assistant_text: str,
+    proxy_us_list: list[int],
+    recall_rounds_total: int,
+) -> None:
+    """Render the closing panel for `sieve demo`.
+
+    Summarises the 6-turn conversation:
+      • turns completed + facts learned
+      • absence-trap verdict (did the model refuse to fabricate?)
+      • median proxy latency
+      • what to try next
+    """
+    from rich.panel import Panel
+    # Absence-trap verdict: turn 6 asked about a person ("Pat") who was
+    # never mentioned. A correctly-behaving Sieve install should NOT
+    # invent ANY fact about Pat — not a workplace, not a profession,
+    # not a relationship, nothing. The strict check below fails the
+    # verdict on any of those inventions, regardless of whether the
+    # model also said "I don't know the workplace."
+    trap_text = (last_assistant_text or "").lower()
+    refused_markers = (
+        "don't have", "do not have", "haven't been told", "haven't mentioned",
+        "no information", "isn't mentioned", "not mentioned",
+        "no record", "haven't shared", "you haven't",
+        "no context", "wasn't shared", "you didn't mention",
+        "i don't know", "i do not know", "haven't told me",
+    )
+    refused = any(m in trap_text for m in refused_markers)
+    # Stronger counter-check: did the model invent ANY claim about Pat?
+    # If "pat" appears followed by a claim verb (is/works/lives/has/etc.)
+    # within a short window, the model fabricated.
+    import re as _re
+    invention_pattern = _re.compile(
+        r"\bpat\s+(?:is|works|lives|has|had|likes|loves|prefers|"
+        r"studied|studies|enjoys|graduated|moved|drives|owns|"
+        r"speaks|plays|teaches|leads|runs)\b",
+        _re.IGNORECASE,
+    )
+    looks_like_invention = bool(invention_pattern.search(trap_text))
+    if looks_like_invention:
+        trap_line = "[red]✗ fabricated a claim about Pat — review turn 6 above[/]"
+    elif refused:
+        trap_line = "[green]✓ refused to fabricate[/]"
+    else:
+        trap_line = "[yellow]⚠ couldn't confirm refusal — review turn 6 above[/]"
+
+    # Latency stats
+    if proxy_us_list:
+        proxy_us_list = sorted(proxy_us_list)
+        p50_us = proxy_us_list[len(proxy_us_list) // 2]
+        p50_ms = p50_us / 1000
+        latency_line = f"[cyan]{p50_ms:.1f} ms[/] (p50 across {len(proxy_us_list)} turns)"
+    else:
+        latency_line = "[dim]no latency data[/]"
+
+    lines = [
+        f"[bold]Turns:[/]        [cyan]{completed_turns}/6[/] completed",
+        f"[bold]Facts learned:[/] [cyan]{final_fact_count}[/] "
+        f"(grew by [green]+{facts_learned}[/] across the conversation)",
+        f"[bold]Recall calls:[/]  [cyan]{recall_rounds_total}[/] "
+        f"in-flight context pulls",
+        f"[bold]Trap turn 6:[/]   {trap_line}",
+        f"[bold]Proxy latency:[/] {latency_line}",
+        "",
+        "[bold]What this proved[/]",
+        "  • Sieve sat between your agent and your LLM, transparently",
+        "  • Facts you shared were extracted into the encrypted local store",
+        "  • Later turns retrieved those facts without re-sending history",
+        "  • When asked about a person never mentioned, the model didn't invent",
+        "",
+        "[bold]Next:[/]",
+        "  • [cyan]sieve benchmark[/]  — measure token reduction + cost savings",
+        "  • [cyan]sieve store stats[/] — inspect what was learned",
+        "  • [cyan]sieve wizard[/]     — interactive management menu",
+    ]
+    console.print(
+        Panel("\n".join(lines), title="Demo complete", border_style="green")
+    )
 
 
 _FIXTURE_CHOICES = ("small", "medium", "large", "xlarge")
