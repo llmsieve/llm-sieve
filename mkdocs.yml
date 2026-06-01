@@ -49,6 +49,7 @@ nav:
   - Installation: installation.md
   - Configuration: configuration.md
   - CLI reference: cli-reference.md
+  - Diagnostic headers: diagnostic-headers.md
 
 markdown_extensions:
   - admonition

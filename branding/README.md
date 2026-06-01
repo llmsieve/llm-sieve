@@ -79,3 +79,21 @@ OLLAMA_HOST_IP=10.0.0.42 FORCE_DOCKER=1 ./branding/render-gifs.sh all
 ```
 
 This keeps the rendered GIFs free of anyone's home LAN IP while letting the render actually hit a real server during the (hidden) preparation steps.
+
+## Vendor-agnostic recording (v1-rc and later)
+
+`sieve-wizard-install.tape` has been updated to record the new 5-branch provider picker (Anthropic / OpenAI / OpenAI-compatible / Ollama / Custom). To keep the GIF vendor-neutral, the tape picks option 3 (OpenAI-compatible) and points the wizard at a generic stub URL.
+
+For the stub URL to actually respond during recording, start `branding/stub_provider.py` alongside the renderer:
+
+```bash
+# Terminal 1: launch the stub on 127.0.0.1:8765
+python branding/stub_provider.py &
+
+# Terminal 2: render the tape
+./branding/render-gifs.sh wizard
+```
+
+The stub serves both OpenAI-compatible (`/v1/models`, `/v1/chat/completions`) and Ollama-compatible (`/api/tags`, `/api/chat`) endpoints with canned responses. It's purpose-built for recording — no production use. See `branding/stub_provider.py` for the surface.
+
+When recording, point sieve-install at `http://127.0.0.1:8765/v1` (when picking option 3) — the rendered GIF will simply show the generic URL, not endorse any specific cloud provider. The principle is: Sieve works with any OpenAI-compatible endpoint you bring.

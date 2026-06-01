@@ -162,6 +162,45 @@ class TestS2Parsing:
         # Should detect speculative from original text + content match
         assert facts[0].confidence <= 0.4 or facts[0].fact_type == "subjective"
 
+    def test_strip_think_tags_before_json_parse(self):
+        """Reasoning models (gpt-oss, qwen-thinking, DeepSeek-R1) sometimes emit
+        <think>...</think> blocks even when the request asks them not to.
+        The writer must strip these before JSON parse, or extractions are
+        silently dropped."""
+        thinking_response = (
+            "<think>\nLet me identify the facts. The user mentioned "
+            "they live in Lisbon. That's a location fact.\n</think>\n"
+            + json.dumps({
+                "facts": [
+                    {"content": "User lives in Lisbon", "fact_type": "objective",
+                     "category": "location", "confidence": 0.8,
+                     "entities": ["Lisbon"], "speculative": False},
+                ]
+            })
+        )
+        facts = _parse_s2_response(thinking_response, "I live in Lisbon")
+        assert facts is not None, "Think-tag prelude broke JSON parse"
+        assert len(facts) == 1
+        assert "Lisbon" in facts[0].content
+
+    def test_strip_think_tags_with_fence(self):
+        """<think> block followed by markdown fence — both must be stripped."""
+        thinking_response = (
+            "<think>reasoning here</think>\n```json\n"
+            + json.dumps({"facts": []})
+            + "\n```"
+        )
+        facts = _parse_s2_response(thinking_response, "test")
+        assert facts == []  # parsed cleanly to empty list
+
+    def test_unclosed_think_tag_does_not_crash(self):
+        """Defensive: an unclosed <think> tag (truncated response) should not
+        match the regex (requires </think>) and fall through to normal parse,
+        which will fail gracefully via the existing path."""
+        truncated_response = "<think>reasoning never closed"
+        facts = _parse_s2_response(truncated_response, "test")
+        assert facts is None  # falls through to existing JSON-parse-error handling
+
 
 # ─── Conflict Resolution ─────────────────────────────────────────────────────
 

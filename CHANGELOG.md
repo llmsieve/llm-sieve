@@ -4,7 +4,81 @@ All notable changes to this project will be documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — release candidate (v1.0.0-rc1)
+
+### Installer — 5-branch provider picker (closes Ollama bias)
+
+The first-run installer no longer assumes Ollama. The wizard's first
+question is now an explicit pick of the provider you have:
+
+  1. Anthropic (Claude)
+  2. OpenAI
+  3. OpenAI-compatible endpoint (OpenRouter, Groq, vLLM, LM Studio, …)
+  4. Ollama (local)
+  5. Custom URL
+
+Each branch handles URL + key + probe per its conventions, with
+provider-specific model defaults so cloud branches succeed without
+hitting `/v1/models` listing endpoints that Anthropic and OpenAI
+don't expose anonymously.
+
+`sieve-install --no-input` now auto-detects in priority order:
+ANTHROPIC_API_KEY → OPENAI_API_KEY → local Ollama. On total miss it
+prints a richer error with concrete next-steps instead of a one-line
+refusal.
+
+### Writer — `<think>`-tag defence + skip-empty classifier
+
+* `writer.py` now strips `<think>...</think>` blocks before its JSON
+  parse, defending against reasoning models that emit traces even
+  when asked not to. Closes a real silent-fact-drop hole observed
+  on `gpt-oss:20b` via Ollama cloud (~3-5/30 turns affected).
+* New `sieve/_writer_classifier.py` skips the writer LLM call
+  entirely on turns that can't contain extractable facts (filler,
+  pure questions with no proper-noun anchor, social greetings).
+  Measured to skip ~70-80% of representative traffic with no
+  fact-share regressions. Controlled by `writer.skip_empty_turns:
+  true` in config (default on).
+* New wizard question asks whether to use the same model for the
+  writer step (default) or a dedicated smaller one. Warns when
+  the chosen target looks like a reasoning model.
+
+### Docs — Phase 3 numbers + brand-respectful landing page
+
+`docs/index.md` rewritten to lead with the empirical headline pitch
+backed by the Phase 3 release-candidate evidence (recall repo tag
+`v1.1.0-phase3-rc`):
+
+* **95% fewer tokens** — invariant across 5 LLM architectures, 8B-72B
+  model sizes, 8K-64K windows, 1-64 concurrency
+* **3-7× faster followups** — measured p50s on Llama-70B and Qwen-72B
+* **Sub-15ms recall** at 100k facts with full production crypto
+
+The layout uses grid cards, a confidence-via-transparency "honest
+scope" section, and a discreet desaturated-navy divider style — all
+inside the brand book (teal reserved for the mark, sentence case,
+no drop shadows). Adds the previously-orphan `diagnostic-headers.md`
+to the nav.
+
+### Sundry
+
+* `sieve.__version__` now exposed via `importlib.metadata`. Closes
+  `AttributeError: module 'sieve' has no attribute '__version__'`.
+* `sieve init` URL handling: auto-prepends `http://` to bare
+  hostnames before probing. Closes the confusing "Request URL is
+  missing an 'http://' or 'https://' protocol" error on valid input.
+* `sieve init` success message now shows configured provider + listen
+  URL + a hint about `sieve demo`.
+
+### Methodology + audit artefacts
+
+* `WRITER_LATENCY_BATTERY_DESIGN.md` + `WRITER_LATENCY_BATTERY_RESULTS.md`
+  — the 60-cell measurement that motivated the skip-empty classifier
+  and the "no bundled writer" decision.
+* `RELEASE_AUDIT.md` — the wizard + docs audit that surfaced this
+  branch's scope.
+
+## [Earlier unreleased work]
 
 ### `sieve-install` — one-command first-run
 
