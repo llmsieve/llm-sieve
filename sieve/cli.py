@@ -1275,7 +1275,15 @@ def init(provider: str | None, force: bool, wizard: bool):
                 default=default,
             )
 
-    # --- Step 2: health-check the provider (warn but don't block) ---
+    # --- Step 2: normalise + health-check the provider ---
+    # Normalise the URL so users can paste "localhost:11434" or
+    # "192.168.1.10" without an explicit scheme. We default to http
+    # for bare hostnames (the common Ollama case); https URLs are
+    # preserved as-is.
+    if provider and "://" not in provider:
+        provider = f"http://{provider}"
+        console.print(f"[dim]Assuming http:// — using {provider}[/]")
+
     import httpx
     try:
         r = httpx.get(f"{provider.rstrip('/')}/api/tags", timeout=3.0)
@@ -1285,10 +1293,15 @@ def init(provider: str | None, force: bool, wizard: bool):
             console.print(
                 f"[yellow]Provider responded {r.status_code} — will retry at start.[/]"
             )
+    except httpx.ConnectError:
+        console.print(
+            f"[yellow]Could not reach {provider} (connection refused).[/] "
+            f"Continuing — start your LLM endpoint before `sieve start`."
+        )
     except Exception as exc:
         console.print(
-            f"[yellow]Could not reach provider ({exc}).[/] "
-            f"Continuing — you can fix this in {cfg_path} later."
+            f"[yellow]Could not reach provider: {type(exc).__name__}: {exc}.[/]\n"
+            f"[dim]Continuing — you can fix this in {cfg_path} later.[/]"
         )
 
     # --- Step 3: download the FastEmbed model with progress ---
@@ -1354,8 +1367,16 @@ def init(provider: str | None, force: bool, wizard: bool):
     console.print()
     console.print("[bold green]Ready![/]")
     console.print(
-        f"Start Sieve with: [cyan]sieve start[/]  "
-        f"(point your agent at [cyan]http://localhost:{config.listen.port}[/])"
+        f"  [dim]Configured for:[/] [cyan]{provider}[/]"
+    )
+    console.print(
+        f"  [dim]Sieve will listen on:[/] [cyan]http://localhost:{config.listen.port}[/]"
+    )
+    console.print()
+    console.print(f"  Run [cyan]sieve start[/] to launch the proxy.")
+    console.print(f"  Run [cyan]sieve demo[/] to see Sieve in action with a 30-second sample.")
+    console.print(
+        f"  Then point your agent at [cyan]http://localhost:{config.listen.port}[/]."
     )
 
 

@@ -238,17 +238,30 @@ def _main_flow(
             )
     else:
         if no_input:
-            # Default: local Ollama if reachable, otherwise fail fast.
-            provider_url = "http://127.0.0.1:11434"
-            provider_api_key = None
-            if not _reachable(provider_url):
+            # Auto-detect a provider in priority order:
+            # 1. ANTHROPIC_API_KEY env var → Anthropic
+            # 2. OPENAI_API_KEY env var → OpenAI
+            # 3. Local Ollama on 11434 → Ollama
+            # Fail-fast with concrete next steps if none.
+            provider_url, provider_api_key = _auto_detect_provider()
+            if provider_url is None:
                 raise _InstallerExit(
                     message=(
-                        "[red]--no-input and default Ollama isn't running.[/] "
-                        "Pass --provider URL or start Ollama first."
+                        "[red]--no-input couldn't auto-detect a provider.[/]\n"
+                        "[dim]Tried in order:[/]\n"
+                        "  • ANTHROPIC_API_KEY env var (not set)\n"
+                        "  • OPENAI_API_KEY env var (not set)\n"
+                        "  • Ollama at http://127.0.0.1:11434 (not reachable)\n\n"
+                        "[bold]Next steps:[/]\n"
+                        "  • Set ANTHROPIC_API_KEY or OPENAI_API_KEY, OR\n"
+                        "  • Start Ollama: [cyan]curl -fsSL https://ollama.com/install.sh | sh[/], OR\n"
+                        "  • Pass [cyan]--provider URL --api-key KEY[/] explicitly."
                     ),
                     code=1,
                 )
+            console.print(
+                f"[green]Auto-detected provider: {provider_url}[/]"
+            )
         else:
             provider_url, provider_api_key = _pick_llm_location(console)
 
@@ -368,72 +381,229 @@ def _render_welcome(console) -> None:
 
 
 def _pick_llm_location(console) -> tuple[str, str | None]:
-    """Return (provider_url, api_key). api_key is None for local/LAN."""
+    """Return (provider_url, api_key). api_key is None when not needed
+    (local Ollama).
+
+    Five-branch picker covering every supported provider type:
+      1. Anthropic (Claude) — cloud, requires API key
+      2. OpenAI — cloud, requires API key
+      3. OpenAI-compatible — anything speaking /v1/chat/completions
+         (OpenRouter, Groq, Together, vLLM, llama.cpp, LM Studio, etc.)
+      4. Ollama (local) — local daemon, no key
+      5. Custom URL — bring-your-own endpoint and key
+
+    Before showing the picker, we auto-detect the most likely match
+    (env var keys, then a reachable local Ollama) and offer to use it
+    as a one-keystroke happy path. The picker only appears when
+    auto-detect fails or the user declines the suggestion.
+    """
     from sieve._wizard_helpers import NumberedChoice, pick_numbered
 
-    # Probe the obvious default first; if it works, skip the branch
-    # picker entirely (zero friction happy path).
+    # ── Auto-detect happy path ─────────────────────────────────────
+    # If we can confidently identify a provider, offer it inline.
+    detected_url, detected_key = _auto_detect_provider()
+    if detected_url:
+        label = _describe_provider(detected_url, detected_key)
+        if click.confirm(
+            f"[?] Found {label}. Use it?",
+            default=True,
+        ):
+            return detected_url, detected_key
+        # User declined; fall through to picker.
+
+    # ── Branch picker ──────────────────────────────────────────────
+    choices = [
+        NumberedChoice(
+            label="Anthropic (Claude)",
+            value="anthropic",
+            help="Cloud API. Requires ANTHROPIC_API_KEY. Best quality for most users.",
+        ),
+        NumberedChoice(
+            label="OpenAI",
+            value="openai",
+            help="Cloud API. Requires OPENAI_API_KEY. GPT-4, GPT-4o, o1, o3.",
+        ),
+        NumberedChoice(
+            label="OpenAI-compatible endpoint",
+            value="openai_compat",
+            help="OpenRouter, Groq, Together, Mistral cloud, vLLM, llama.cpp, LM Studio…",
+        ),
+        NumberedChoice(
+            label="Ollama (local)",
+            value="ollama",
+            help="Local Ollama daemon. No key required.",
+        ),
+        NumberedChoice(
+            label="Custom URL",
+            value="custom",
+            help="Bring your own — we'll prompt for endpoint and key separately.",
+        ),
+    ]
+    pick = pick_numbered(
+        "Which kind of LLM are you using?",
+        choices,
+        default="ollama",
+        console=console,
+    )
+
+    if pick == "anthropic":
+        return _setup_anthropic(console)
+    if pick == "openai":
+        return _setup_openai(console)
+    if pick == "openai_compat":
+        return _setup_openai_compat(console)
+    if pick == "ollama":
+        return _setup_ollama(console)
+    # custom
+    return _setup_custom(console)
+
+
+def _describe_provider(url: str, api_key: str | None) -> str:
+    """Human-readable provider label for confirmation prompts."""
+    low = url.lower()
+    if "anthropic" in low:
+        return "Anthropic (Claude) via ANTHROPIC_API_KEY"
+    if "openai" in low:
+        return "OpenAI via OPENAI_API_KEY"
+    if "127.0.0.1" in low or "localhost" in low:
+        return f"local Ollama at {url}"
+    return url
+
+
+def _setup_anthropic(console) -> tuple[str, str]:
+    """Anthropic Claude — fixed URL, prompt for key if not in env."""
+    url = "https://api.anthropic.com/v1"
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        console.print(
+            f"[green]Found ANTHROPIC_API_KEY in your environment[/] "
+            "[dim](not displayed)[/]"
+        )
+    else:
+        api_key = click.prompt(
+            "Anthropic API key (sk-ant-…)",
+            type=str,
+            hide_input=True,
+            default="",
+            show_default=False,
+        ).strip()
+        if not api_key:
+            raise _InstallerExit(
+                message="[yellow]Anthropic needs an API key. Cancelled.[/]",
+                code=0,
+            )
+    return url, api_key
+
+
+def _setup_openai(console) -> tuple[str, str]:
+    """OpenAI — fixed URL, prompt for key if not in env."""
+    url = "https://api.openai.com/v1"
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        console.print(
+            f"[green]Found OPENAI_API_KEY in your environment[/] "
+            "[dim](not displayed)[/]"
+        )
+    else:
+        api_key = click.prompt(
+            "OpenAI API key (sk-…)",
+            type=str,
+            hide_input=True,
+            default="",
+            show_default=False,
+        ).strip()
+        if not api_key:
+            raise _InstallerExit(
+                message="[yellow]OpenAI needs an API key. Cancelled.[/]",
+                code=0,
+            )
+    return url, api_key
+
+
+def _setup_openai_compat(console) -> tuple[str, str | None]:
+    """OpenAI-compatible — prompt for URL and optional key."""
+    url = click.prompt(
+        "Endpoint base URL (e.g. https://openrouter.ai/api/v1)",
+        type=str,
+    ).strip()
+    if not url:
+        raise _InstallerExit(
+            message="[yellow]No URL given. Cancelled.[/]",
+            code=0,
+        )
+    api_key: str | None = click.prompt(
+        "API key (leave blank if none required)",
+        type=str,
+        hide_input=True,
+        default="",
+        show_default=False,
+    ).strip() or None
+    # Probe.
+    console.print(f"[dim]Probing {url}…[/]", end="")
+    if _reachable(url, api_key=api_key):
+        console.print(" [green]reachable ✓[/]")
+    else:
+        console.print(" [yellow]not reachable / rejected auth[/]")
+        if not click.confirm(
+            "Save this endpoint anyway (fix later via Config)?",
+            default=False,
+        ):
+            raise _InstallerExit(
+                message="[yellow]Cancelled. No changes written.[/]",
+                code=0,
+            )
+    return url, api_key
+
+
+def _setup_ollama(console) -> tuple[str, None]:
+    """Local or LAN Ollama. Probe the default first, then offer the LAN
+    path if not reachable."""
     default_url = "http://127.0.0.1:11434"
     console.print(f"[dim]Probing {default_url}…[/]", end="")
     if _reachable(default_url):
         console.print(" [green]reachable ✓[/]")
-        use_it = click.confirm(
-            f"Use the local Ollama at {default_url}?",
-            default=True,
-        )
-        if use_it:
-            return default_url, None
-    else:
-        console.print(" [yellow]not reachable[/]")
-
-    # Branch picker.
-    choices = [
-        NumberedChoice(
-            label="Local Ollama (at 127.0.0.1:11434)",
-            value="local",
-            help="If Ollama is installed on this machine.",
-        ),
-        NumberedChoice(
-            label="LAN Ollama — I'll give you the IP",
-            value="lan",
-            help="Ollama running on another host in your network.",
-        ),
-        NumberedChoice(
-            label="Cloud endpoint (Claude / OpenAI / vLLM / LM Studio / Groq…)",
-            value="cloud",
-            help="Any OpenAI-compatible endpoint.",
-        ),
-    ]
-    pick = pick_numbered(
-        "Where is your LLM?",
-        choices,
-        default="local",
-        console=console,
+        return default_url, None
+    console.print(" [yellow]not reachable[/]")
+    console.print(
+        "[dim]Tip: install with [cyan]curl -fsSL https://ollama.com/install.sh | sh[/]"
+        " then [cyan]ollama serve[/] in another terminal.[/]"
+    )
+    if click.confirm(
+        "Use a LAN Ollama (different host) instead?",
+        default=False,
+    ):
+        return _pick_lan_ollama(console), None
+    # Local-but-not-yet-running path: let the user proceed.
+    if click.confirm(
+        f"Save {default_url} anyway (start Ollama before `sieve start`)?",
+        default=True,
+    ):
+        return default_url, None
+    raise _InstallerExit(
+        message="[yellow]Cancelled.[/]",
+        code=0,
     )
 
-    if pick == "local":
-        # Already probed; let the user proceed anyway (maybe they're
-        # about to start Ollama) or refuse.
-        if not _reachable(default_url):
-            console.print(
-                f"[yellow]{default_url} still isn't reachable.[/] "
-                "Sieve needs an endpoint to point at."
-            )
-            if not click.confirm(
-                "Continue anyway (you can fix this later via Config)?",
-                default=False,
-            ):
-                raise _InstallerExit(
-                    message="[yellow]Cancelled.[/]",
-                    code=0,
-                )
-        return default_url, None
 
-    if pick == "lan":
-        return _pick_lan_ollama(console), None
-
-    # cloud
-    return _pick_cloud_endpoint(console)
+def _setup_custom(console) -> tuple[str, str | None]:
+    """Custom URL — minimal probing, user is on their own."""
+    url = click.prompt(
+        "Custom endpoint base URL",
+        type=str,
+    ).strip()
+    if not url:
+        raise _InstallerExit(
+            message="[yellow]No URL given. Cancelled.[/]",
+            code=0,
+        )
+    api_key: str | None = click.prompt(
+        "API key (leave blank if none required)",
+        type=str,
+        hide_input=True,
+        default="",
+        show_default=False,
+    ).strip() or None
+    return url, api_key
 
 
 def _pick_lan_ollama(console) -> str:
@@ -460,83 +630,6 @@ def _pick_lan_ollama(console) -> str:
         ):
             return url
         # Otherwise loop.
-
-
-def _pick_cloud_endpoint(console) -> tuple[str, str | None]:
-    """Cloud picker. Returns (url, api_key)."""
-    from sieve._wizard_helpers import NumberedChoice, pick_numbered
-
-    choices = [
-        NumberedChoice(
-            label="Anthropic Claude (api.anthropic.com)",
-            value="claude",
-            help="Claude Sonnet / Opus / Haiku via OpenAI-compat endpoint.",
-        ),
-        NumberedChoice(
-            label="OpenAI (api.openai.com)",
-            value="openai",
-            help="GPT-4o / 4o-mini / 3.5-turbo.",
-        ),
-        NumberedChoice(
-            label="Other OpenAI-compatible endpoint (vLLM, LM Studio, Groq, …)",
-            value="other",
-            help="Anything that speaks /v1/chat/completions with bearer auth.",
-        ),
-    ]
-    provider = pick_numbered(
-        "Which cloud provider?",
-        choices,
-        default="claude",
-        console=console,
-    )
-
-    if provider == "claude":
-        url = "https://api.anthropic.com/v1"
-        env_var = "ANTHROPIC_API_KEY"
-    elif provider == "openai":
-        url = "https://api.openai.com/v1"
-        env_var = "OPENAI_API_KEY"
-    else:
-        url = click.prompt(
-            "Endpoint base URL (e.g. https://my-vllm.internal/v1)",
-            type=str,
-        ).strip()
-        env_var = ""
-
-    # API key: env first (don't bother users who already set it),
-    # prompt otherwise. We never echo it back.
-    api_key: str | None = None
-    if env_var:
-        api_key = os.environ.get(env_var) or None
-        if api_key:
-            console.print(
-                f"[green]Found {env_var} in your environment[/] "
-                "[dim](not displayed)[/]"
-            )
-    if not api_key:
-        api_key = click.prompt(
-            "API key",
-            type=str,
-            hide_input=True,
-            default="",
-            show_default=False,
-        ).strip() or None
-
-    # Probe.
-    console.print(f"[dim]Probing {url}…[/]", end="")
-    if _reachable(url, api_key=api_key):
-        console.print(" [green]reachable ✓[/]")
-        return url, api_key
-    console.print(" [yellow]not reachable / rejected auth[/]")
-    if click.confirm(
-        "Save this endpoint anyway (you can fix it later via Config)?",
-        default=False,
-    ):
-        return url, api_key
-    raise _InstallerExit(
-        message="[yellow]Cancelled. No changes written.[/]",
-        code=0,
-    )
 
 
 # ── Step 2: model ────────────────────────────────────────────────────
@@ -569,10 +662,23 @@ def _pick_model_step(
 def _default_model_for(url: str, api_key: str | None) -> str:
     """Pick a best-effort default model when the user doesn't name one.
 
+    Provider-specific defaults take precedence (Anthropic and OpenAI
+    don't have a generic /v1/models that's friendly to anonymous probes,
+    so we hardcode known-good defaults). Other providers fall back to
+    enumerating their model list.
+
+    - Anthropic: claude-sonnet-4-5-20250929 (latest as of release)
+    - OpenAI: gpt-4o-mini (lowest-cost competent default)
     - Local / LAN Ollama: try /api/tags, take the first non-embedding.
     - OpenAI-compat: try /v1/models, same.
-    - Fail-fast if no models available (audit C#9).
+    - Fail-fast if no models available.
     """
+    low = url.lower()
+    if "anthropic.com" in low:
+        return "claude-sonnet-4-5-20250929"
+    if "api.openai.com" in low:
+        return "gpt-4o-mini"
+
     try:
         from sieve._wizard_helpers import list_models
         models = list_models(url, api_key=api_key)
@@ -909,3 +1015,29 @@ def _api_key_from_env(url: str) -> str | None:
     if "openai" in low:
         return os.environ.get("OPENAI_API_KEY")
     return None
+
+
+def _auto_detect_provider() -> tuple[str | None, str | None]:
+    """Try to detect a usable provider without prompting the user.
+
+    Returns (url, api_key) on success, (None, None) on failure.
+
+    Priority order — first match wins:
+      1. ANTHROPIC_API_KEY env var set → Anthropic API
+      2. OPENAI_API_KEY env var set → OpenAI API
+      3. Local Ollama on 127.0.0.1:11434 reachable → local Ollama
+
+    The priority deliberately favours cloud keys over local Ollama: if
+    the user has set an API key in their env, they almost certainly
+    want to use that provider over an accidentally-running Ollama.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        url = "https://api.anthropic.com/v1"
+        return url, os.environ["ANTHROPIC_API_KEY"]
+    if os.environ.get("OPENAI_API_KEY"):
+        url = "https://api.openai.com/v1"
+        return url, os.environ["OPENAI_API_KEY"]
+    default_ollama = "http://127.0.0.1:11434"
+    if _reachable(default_ollama):
+        return default_ollama, None
+    return None, None
