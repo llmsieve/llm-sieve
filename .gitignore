@@ -60,3 +60,5 @@ benchmarks/
 # should pin their own versions. Keep the repo clean of the generated
 # file.
 uv.lock
+writer_battery_*.jsonl
+writer_battery_*.json
