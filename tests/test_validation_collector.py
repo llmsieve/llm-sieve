@@ -3,7 +3,7 @@
 The collector reads MemoryStore.stats() keys that are suffixed with "_count"
 (facts_count, entities_count, relationships_count, known_unknowns_count).
 A prior version of the code read the un-suffixed names and silently wrote
-zeros into validation_metrics.db — a 30-day validation run was entirely
+zeros into validation_metrics.db — long validation runs were entirely
 reported as facts_in_store=0 because of it.
 """
 

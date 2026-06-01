@@ -46,20 +46,6 @@ Sieve removes it. A bloated system prompt full of tool schemas and stale turns b
 
 Full methodology, per-category analysis, and the underlying data will be published in a forthcoming paper; a link will be added here when it's out.
 
-<p align="center">
-  <img src="docs/figures/token-divergence.svg#gh-dark-mode-only" alt="Sieve compresses while baseline grows — token usage over time" width="720">
-  <img src="docs/figures/token-divergence-light.svg#gh-light-mode-only" alt="Sieve compresses while baseline grows — token usage over time" width="720">
-</p>
-
-<p align="center">
-  <img src="docs/figures/hallucination-bars.svg#gh-dark-mode-only" alt="Baseline vs Sieve — fabrication rate on absence-trap queries" width="720">
-  <img src="docs/figures/hallucination-bars-light.svg#gh-light-mode-only" alt="Baseline vs Sieve — fabrication rate on absence-trap queries" width="720">
-</p>
-
-<p align="center">
-  <img src="docs/figures/hallucination-divergence.svg#gh-dark-mode-only" alt="Hallucination rate over 60 days" width="720">
-  <img src="docs/figures/hallucination-divergence-light.svg#gh-light-mode-only" alt="Hallucination rate over 60 days" width="720">
-</p>
 
 ## Quick start
 
@@ -184,10 +170,7 @@ Full reference: [Configuration](https://llmsieve.dev/configuration/).
 
 **Tested models.**
 
-- `qwen3:30b-a3b` — 30-day longitudinal run.
-- `qwen3:14b` — 60-day longitudinal run.
-
-Other Qwen, DeepSeek, Llama, Mistral, and Gemma variants have been smoke-tested through Ollama. Reasoning-token support (`options.think`) is gated on the model family.
+Qwen, DeepSeek, Llama, Mistral, GPT-OSS, Gemma, and Granite variants have been exercised through Ollama and OpenAI-compatible endpoints across the 8B–72B size range. Reasoning-token support (`options.think`) is gated on the model family.
 
 ## Security and privacy
 
