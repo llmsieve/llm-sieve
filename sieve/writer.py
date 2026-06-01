@@ -1874,6 +1874,7 @@ class MemoryWriter:
         ghost_validator_enabled: bool = True,
         tier2_classifier_enabled: bool = False,
         tier2_classifier_model: str = "auto",  # 'auto' -> writer_model (already resolved)
+        skip_empty_turns: bool = True,
     ):
         """
         Args:
@@ -1888,6 +1889,9 @@ class MemoryWriter:
             owner_name: Profile owner name pinned into the S2 prompt (empty = no pinning).
             profile_owner_aliases: Additional name aliases for the profile owner (e.g. ["Jamie", "I", "me"]).
             ghost_validator_enabled: Enable post-S2 ghost-fact structural validator.
+            skip_empty_turns: Use the fast pre-filter to skip the S2 LLM call
+                on turns with no extractable facts (filler, questions with no
+                proper-noun anchor, social greetings). Default True.
         """
         self._store = store
         self._embed_fn = embed_fn
@@ -1901,6 +1905,7 @@ class MemoryWriter:
         self._owner_aliases = list(profile_owner_aliases or [])
         self._ghost_validator_enabled = ghost_validator_enabled
         self._tier2_classifier_enabled = tier2_classifier_enabled
+        self._skip_empty_turns = skip_empty_turns
         self._tier2_classifier_model = tier2_classifier_model
         self._session_messages: dict[str, list[str]] = {}  # per-session coherence tracking
 
@@ -1948,21 +1953,50 @@ class MemoryWriter:
                 len(s1_candidates), len(user_text),
             )
 
-        # S2: LLM extraction (gated, controllable via ABL-S2)
+        # S2: LLM extraction (gated, controllable via ABL-S2).
+        # The skip-empty pre-filter runs first and short-circuits the
+        # ~70% of turns that can't contain extractable facts. The
+        # existing _s2_gate handles the remaining nuance for borderline
+        # cases. Both filters err toward skipping; combined they cut
+        # writer-pass cost dramatically with no measured quality loss
+        # — see WRITER_LATENCY_BATTERY_RESULTS.md.
         s2_candidates: list[ExtractedFact] = []
-        if self._stage2_enabled and _s2_gate(user_text, s1_candidates):
-            result.stage2_invoked = True
-            logger.info("Writer S2 gate: OPEN — invoking LLM extraction")
-            s2_candidates = await extract_facts_s2(
-                user_text, self._provider_base_url,
-                model=self._writer_model,
-                fallback_model=self._fallback_model,
-                num_ctx=self._num_ctx,
-                owner_name=self._owner_name,
-            )
-            result.stage2_facts = len(s2_candidates)
-            if s2_candidates:
-                logger.info("Writer S2: extracted %d candidates", len(s2_candidates))
+        if self._stage2_enabled:
+            if self._skip_empty_turns:
+                from sieve._writer_classifier import should_skip_writer
+                if should_skip_writer(user_text):
+                    logger.debug("Writer S2 skipped: empty-turn classifier")
+                    # Fall through; s2_candidates stays empty
+                    pass
+                else:
+                    if _s2_gate(user_text, s1_candidates):
+                        result.stage2_invoked = True
+                        logger.info("Writer S2 gate: OPEN — invoking LLM extraction")
+                        s2_candidates = await extract_facts_s2(
+                            user_text, self._provider_base_url,
+                            model=self._writer_model,
+                            fallback_model=self._fallback_model,
+                            num_ctx=self._num_ctx,
+                            owner_name=self._owner_name,
+                        )
+                        result.stage2_facts = len(s2_candidates)
+                        if s2_candidates:
+                            logger.info("Writer S2: extracted %d candidates", len(s2_candidates))
+            else:
+                # skip-empty disabled: use existing gate only.
+                if _s2_gate(user_text, s1_candidates):
+                    result.stage2_invoked = True
+                    logger.info("Writer S2 gate: OPEN — invoking LLM extraction")
+                    s2_candidates = await extract_facts_s2(
+                        user_text, self._provider_base_url,
+                        model=self._writer_model,
+                        fallback_model=self._fallback_model,
+                        num_ctx=self._num_ctx,
+                        owner_name=self._owner_name,
+                    )
+                    result.stage2_facts = len(s2_candidates)
+                    if s2_candidates:
+                        logger.info("Writer S2: extracted %d candidates", len(s2_candidates))
 
         # Merge candidates (S1 first, S2 additions)
         all_candidates = s1_candidates + s2_candidates

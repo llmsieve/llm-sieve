@@ -269,6 +269,7 @@ def create_app(config: RecallConfig | None = None) -> FastAPI:
             ghost_validator_enabled=config.writer.ghost_validator_enabled,
             tier2_classifier_enabled=config.ablation.tier2_classifier,
             tier2_classifier_model=config.ablation.tier2_classifier_model,
+            skip_empty_turns=config.writer.skip_empty_turns,
         )
         classifier = QueryClassifier(memory_store, embed_fn=embedding_client.embed)
         retriever = ContextRetriever(
