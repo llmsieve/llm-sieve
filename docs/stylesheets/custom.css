@@ -136,3 +136,83 @@
 .md-footer {
   background-color: var(--md-footer-bg-color);
 }
+
+/* ── Landing page polish (index.md) ────────────────────────── */
+/*
+ * The landing page uses brand-respectful restraint:
+ * - The teal accent (#0D9488) stays reserved for the mark.
+ * - Hero/section dividers use a desaturated navy tint instead
+ *   of an explicit rule — gives structure without chrome.
+ * - Grid cards use a slightly elevated background slab so they
+ *   read as discrete units without needing borders.
+ */
+
+.sieve-divider {
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(82, 82, 91, 0.25) 20%,
+    rgba(82, 82, 91, 0.25) 80%,
+    transparent 100%
+  );
+  margin: 2.5rem auto;
+  width: 100%;
+}
+
+[data-md-color-scheme="slate"] .sieve-divider {
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(220, 220, 224, 0.12) 20%,
+    rgba(220, 220, 224, 0.12) 80%,
+    transparent 100%
+  );
+}
+
+/* Grid card polish — only on pages that use them. */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid.cards > .card,
+.md-typeset div.grid > div {
+  border-radius: 8px;
+  padding: 1.2rem 1.4rem;
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li {
+  background: rgba(220, 220, 224, 0.03);
+  border-color: rgba(220, 220, 224, 0.08);
+}
+
+[data-md-color-scheme="default"] .md-typeset .grid.cards > ul > li {
+  background: #fafafa;
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: rgba(13, 148, 136, 0.4);
+  /* The single allowed use of teal in chrome: subtle hover hint that
+   * a card is part of an active navigation surface. The dot in the
+   * logo and the hover-hint are the only teal surfaces in the system. */
+}
+
+/* Card heading — tighten spacing so cards read as compact units. */
+.md-typeset .grid.cards > ul > li > h3 {
+  margin-top: 0;
+  margin-bottom: 0.4rem;
+  font-weight: 600;
+}
+
+/* Landing-page H1 (sentence-case wordmark substrate) — extra breathing
+ * room below the page title before the lead paragraph. */
+.md-typeset > h1:first-child {
+  margin-bottom: 1.5rem;
+}
+
+/* The "Honest scope" + "What's not in this docs site" sections sit
+ * close to the cards visually; give them a small left rule to mark
+ * them as commentary, not a primary section. */
+.md-typeset h2 + ul {
+  margin-top: 0.6rem;
+}
