@@ -2458,18 +2458,27 @@ def _benchmark_wizard(
     )
 
     # ── Fixture ─────────────────────────────────────────────────────
+    # 'small' is hidden from the wizard. Its baseline payload (~73
+    # tokens) is below the cost of Sieve's own injected memory
+    # context, so the comparison shows Sieve using more tokens — true,
+    # but a misleading first impression. `--fixture small` still
+    # works for diagnostics.
+    wizard_fixtures = [n for n in fixture_names() if n != "small"]
     fixture_choices = [
         NumberedChoice(
             label=f"{name:<7} (~{fixture_approx_tokens(name):,} base tokens)",
             value=name,
             help=fixture_description(name),
         )
-        for name in fixture_names()
+        for name in wizard_fixtures
     ]
+    # Snap the default into the visible set so the * marker actually
+    # lands on one of the offered options.
+    wizard_default = fixture_default if fixture_default in wizard_fixtures else "medium"
     fixture = pick_numbered(
         "Agent payload size",
         fixture_choices,
-        default=fixture_default,
+        default=wizard_default,
         console=console,
     )
 
@@ -2749,17 +2758,32 @@ def _execute_benchmark_v2(
 
 
 def _BENCHMARK_TURNS(n: int):
-    """Return the first n scripted messages, repeating deep-phase turns
-    if n > 15. Bounded to a minimum of 3 so the script has an intro."""
+    """Return a script of exactly n turns, always ending on the trap turn.
+
+    The trap is the absence-signal probe (asking about a person who was
+    never mentioned) and is the headline verdict of the benchmark, so
+    it must run no matter how short the user truncates the script.
+
+    Layout:
+      - First ``n-1`` non-trap messages from BENCHMARK_MESSAGES (in
+        order; intros first so later retrieves have something to recall).
+      - Final turn is always the trap.
+    Repeats deep-phase turns if ``n`` exceeds the scripted length.
+    Bounded to a minimum of 3 turns (2 non-trap + trap).
+    """
     from sieve.cli_benchmark import BENCHMARK_MESSAGES
     msgs = list(BENCHMARK_MESSAGES)
-    if n <= len(msgs):
-        return msgs[: max(3, n)]
-    extra = [m for m in msgs if m["phase"] == "deep"]
-    out = list(msgs)
-    while len(out) < n:
-        out.extend(extra)
-    return out[:n]
+    trap = next((m for m in msgs if m["phase"] == "trap"), None)
+    non_trap = [m for m in msgs if m["phase"] != "trap"]
+    n = max(3, n)
+    body_needed = n - (1 if trap else 0)
+    body = list(non_trap[:body_needed])
+    if len(body) < body_needed:
+        extra = [m for m in non_trap if m["phase"] == "deep"] or non_trap
+        while len(body) < body_needed:
+            body.extend(extra)
+        body = body[:body_needed]
+    return body + ([trap] if trap else [])
 
 
 def _write_benchmark_report(md_text: str):
