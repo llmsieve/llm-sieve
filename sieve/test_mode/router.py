@@ -283,12 +283,19 @@ def _subject_model_id(request: Request) -> str | None:
 
 
 def _get_sieve_commit_sha() -> str:
-    """Return git HEAD SHA of the sieve install. Best-effort."""
+    """Return git HEAD SHA of the sieve install. Best-effort.
+
+    Tries the installed package's own directory (works for editable
+    installs from a git checkout). Returns "unknown" for pipx/pip
+    installs from a wheel where there is no .git directory.
+    """
     import subprocess
+    from pathlib import Path
+    package_dir = Path(__file__).resolve().parent.parent
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd="/home/ath/Dev_Projects/llm-sieve",
+            cwd=str(package_dir),
             text=True, stderr=subprocess.DEVNULL,
         )
         return out.strip()
