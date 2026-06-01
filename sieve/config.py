@@ -147,8 +147,6 @@ class WriterConfig:
     # a small purpose-fit model cuts wallclock without degrading the
     # fact store. Override with 'auto' (-> provider.default_model) if
     # you prefer the main model, or set an explicit name.
-    # Validation artefacts: recall repo evaluation/personal_agent_phase/
-    # writer_validation_*.json .
     model: str = "qwen3.5:4b"
     fallback_model: str = "auto"
     num_ctx: int = 4096
@@ -250,13 +248,13 @@ class ProfileOwnerConfig:
 
 @dataclass
 class ValidationConfig:
-    """Opt-in metrics collection for the live validation harness.
+    """Opt-in metrics collection.
 
     When ``enabled=True`` the ``/api/chat`` and ``/v1/chat/completions``
     endpoints emit one Tier 1 + Tier 2 metrics row per intercepted
     request into ``db_path``. Default is OFF so normal operation pays
-    nothing. Used only by ``evaluation/live/`` \u2014 do not enable in
-    production configs.
+    nothing. Intended for offline analysis; do not enable in
+    production configs (hot-path disk writes).
     """
     enabled: bool = False
     db_path: str = "~/.sieve/validation_metrics.db"

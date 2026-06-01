@@ -41,10 +41,10 @@ Sieve removes it. A bloated system prompt full of tool schemas and stale turns b
 
 - **95% fewer tokens per turn** — invariant across 5 LLM architectures (Granite, Llama, Qwen, Mistral, GPT-OSS), 8B-72B model sizes, 8K-64K context windows, and 1-64 concurrent sessions. Range: 92-96% across 33 measurements; no cell below 92%.
 - **3-7× faster followups** — Sieve ships ~150 tokens per turn; baseline ships the full conversation history. On Llama-3.1-70B: 4.44s → 1.24s p50 on follow-ups. On Qwen-2.5-72B: 10.74s → 1.63s p50.
-- **Up to 9× less hallucination** on absence-trap queries — measured across the longitudinal validation runs. Driven by the absence-signal layer (on by default), which refuses to fabricate when a queried fact is not in the store.
+- **Up to 9× less hallucination** on absence-trap queries — driven by the absence-signal layer (on by default), which refuses to fabricate when a queried fact is not in the store.
 - **Sub-15ms recall** at 100k facts with full production crypto (SQLCipher + partition keys).
 
-Headline numbers and methodology overview: [`evaluation/RESULTS_SUMMARY.md`](evaluation/RESULTS_SUMMARY.md). Full methodology and per-category analysis will be published in a forthcoming paper.
+Full methodology, per-category analysis, and the underlying data will be published in a forthcoming paper; a link will be added here when it's out.
 
 <p align="center">
   <img src="docs/figures/token-divergence.svg#gh-dark-mode-only" alt="Sieve compresses while baseline grows — token usage over time" width="720">
@@ -196,11 +196,7 @@ Other Qwen, DeepSeek, Llama, Mistral, and Gemma variants have been smoke-tested 
 - **Zero telemetry.** Sieve does not phone home. There is no analytics, no update check, no metrics endpoint that talks to us.
 - **No account.** No login, no API key for Sieve itself. Bring your own LLM.
 
-Reporting a vulnerability: do not open a public issue — see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Evaluation
-
-Sieve was validated across two independent longitudinal runs — 30 days on `qwen3:30b-a3b` and 60 days on `qwen3:14b` — with cross-family grading (a different model family checks the answers than the one being tested). Headline numbers are in [`evaluation/RESULTS_SUMMARY.md`](evaluation/RESULTS_SUMMARY.md). Full methodology and detailed analysis will be published in a forthcoming paper.
+Reporting a vulnerability: do not open a public issue — see [SECURITY.md](SECURITY.md).
 
 ## Open source
 
