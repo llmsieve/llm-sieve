@@ -16,9 +16,9 @@ invite can see the advisory while it is being worked on.
 
 ### Alternative: email
 
-If you cannot use the GitHub flow, email the maintainer:
+If you cannot use the GitHub flow, email the project:
 
-> azard.hosein@gmail.com
+> contact@llmsieve.com
 
 PGP keys are not currently published. If you need encrypted communication,
 say so in your first message and we will exchange keys before any sensitive
