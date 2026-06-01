@@ -179,20 +179,25 @@ def test_is_already_installed_false_with_corrupt_yaml(tmp_path, monkeypatch):
 # ── Default-model fallback ────────────────────────────────────────────
 
 
-def test_default_model_for_openai_fallback(monkeypatch):
-    """When listing fails (empty list), fail-fast with RuntimeError (audit C#9)."""
+def test_default_model_for_openai_returns_hardcoded_default(monkeypatch):
+    """OpenAI doesn't expose a friendly anonymous /v1/models listing, so
+    the installer returns a hardcoded competent default regardless of
+    what list_models returns. Catches a real install failure for cloud
+    users that previously raised RuntimeError."""
     from sieve import _wizard_helpers
     monkeypatch.setattr(_wizard_helpers, "list_models", lambda *a, **k: [])
-    with pytest.raises(RuntimeError, match="No models available"):
-        _installer._default_model_for("https://api.openai.com/v1", "sk-x")
+    assert _installer._default_model_for(
+        "https://api.openai.com/v1", "sk-x"
+    ) == "gpt-4o-mini"
 
 
-def test_default_model_for_anthropic_fallback(monkeypatch):
-    """When listing fails (empty list), fail-fast with RuntimeError (audit C#9)."""
+def test_default_model_for_anthropic_returns_hardcoded_default(monkeypatch):
+    """Same shape as OpenAI — Anthropic gets a hardcoded current Sonnet."""
     from sieve import _wizard_helpers
     monkeypatch.setattr(_wizard_helpers, "list_models", lambda *a, **k: [])
-    with pytest.raises(RuntimeError, match="No models available"):
-        _installer._default_model_for("https://api.anthropic.com/v1", "sk-x")
+    assert _installer._default_model_for(
+        "https://api.anthropic.com/v1", "sk-x"
+    ) == "claude-sonnet-4-5-20250929"
 
 
 def test_default_model_for_local_fallback(monkeypatch):
@@ -451,17 +456,24 @@ def test_install_flow_surfaces_fastembed_failure(tmp_path, monkeypatch):
 
 
 def test_install_flow_no_input_fails_fast_when_default_unreachable(tmp_path, monkeypatch):
-    """--no-input with no --provider and local Ollama absent: clear
-    error, no config written, exit 1."""
+    """--no-input with no --provider, no env API keys, and local Ollama
+    absent: clear error listing what was tried, no config written, exit 1."""
     monkeypatch.setattr(_installer, "SIEVE_DIR", tmp_path / "fail-fast")
     monkeypatch.setattr(_installer, "render_splash", lambda c: None)
     monkeypatch.setattr(_installer, "_reachable", lambda *a, **k: False)
+    # Ensure no env-key auto-detect fires (the new v1-rc auto-detect
+    # priority: ANTHROPIC_API_KEY → OPENAI_API_KEY → local Ollama).
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     from click.testing import CliRunner
     runner = CliRunner()
     result = runner.invoke(_installer.main, ["--no-input"])
     assert result.exit_code == 1
+    # Error must explain what was tried so the user has next steps.
     assert "--no-input" in result.output
-    assert "default Ollama" in result.output
+    assert "Ollama" in result.output
+    assert "ANTHROPIC_API_KEY" in result.output
+    assert "OPENAI_API_KEY" in result.output
     assert not (tmp_path / "fail-fast" / "sieve.yaml").exists()
 
 
@@ -534,6 +546,13 @@ def test_install_flow_tolerates_autostart_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         _installer, "_pick_model_step",
         lambda c, url, k: "qwen3.5:9b",
+    )
+    # v1-rc added a writer-choice question between model pick and
+    # autostart pick. Mock it to the "auto" default so the rest of
+    # the interactive flow works unchanged.
+    monkeypatch.setattr(
+        _installer, "_pick_writer",
+        lambda console, target_model: "auto",
     )
     from sieve import _autostart
     monkeypatch.setattr(_autostart, "autostart_supported", lambda: True)

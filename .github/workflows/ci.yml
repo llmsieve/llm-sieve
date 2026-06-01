@@ -25,3 +25,22 @@ jobs:
       - name: Run tests
         run: |
           python -m pytest tests/ -x --tb=short
+
+  docs:
+    # Catch docs regressions (broken links, orphan pages, snippet
+    # include failures) before they hit the published site. Strict
+    # mode is the same flag CONTRIBUTING.md tells local devs to use.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+      - name: Build docs (strict)
+        run: |
+          mkdocs build --strict

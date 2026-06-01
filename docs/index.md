@@ -85,7 +85,7 @@ For the marketing site — animated diagrams of Sieve at work, demos, and the fu
 
     [**Architecture**](https://github.com/llmsieve/llm-sieve/blob/main/ARCHITECTURE.md) — the request pipeline, store schema, conflict resolution.
 
-    [**Changelog**](https://github.com/llmsieve/llm-sieve/blob/main/CHANGELOG.md) — what changed and why.
+    [**Changelog**](changelog.md) — what changed and why.
 
 </div>
 

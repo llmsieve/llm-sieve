@@ -130,7 +130,7 @@ Validated on a 30-day run against `qwen3:30b-a3b`:
 
 Three demo GIFs rendered via VHS + a bespoke Docker image — quick
 install, wizard navigation, and a real benchmark-run replay. See
-[`branding/README.md`](branding/README.md) for the render pipeline.
+[`branding/README.md`](https://github.com/llmsieve/llm-sieve/blob/main/branding/README.md) for the render pipeline.
 
 ## [1.0.0] — 2026-04-19
 
@@ -165,7 +165,7 @@ context, backed by an encrypted local memory store.
 ### Patent
 
 Patent pending — UK application GB2608859.1 (filed 16 April 2026).
-See [PATENT_NOTICE](PATENT_NOTICE).
+See [PATENT_NOTICE](https://github.com/llmsieve/llm-sieve/blob/main/PATENT_NOTICE).
 
 ### License
 
