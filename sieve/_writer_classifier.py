@@ -27,9 +27,11 @@ The heuristics:
      no markers, no proper nouns → SKIP.
   6. Anything else → DO NOT skip (default safe path: let the writer decide).
 
-Empirical validation: WRITER_LATENCY_BATTERY_RESULTS.md shows this skips
-~70-80% of turns from the Phase 3 representative sample while preserving
-fact-share recall.
+Empirical validation: the writer-latency battery (60 cells × 30 turns,
+sampled from the Phase 3 simulator captures) measured ~70-80% skip
+rate on this classifier with no fact-share regressions. The battery
++ its analysis live in the private recall research repository; the
+design decision is summarised here.
 
 The classifier is intentionally a regex/string heuristic rather than an
 ML model so it stays:
