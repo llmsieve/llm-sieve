@@ -41,11 +41,10 @@ Sieve removes it. A bloated system prompt full of tool schemas and stale turns b
 
 - **95% fewer tokens per turn** — invariant across 5 LLM architectures (Granite, Llama, Qwen, Mistral, GPT-OSS), 8B-72B model sizes, 8K-64K context windows, and 1-64 concurrent sessions. Range: 92-96% across 33 measurements; no cell below 92%.
 - **3-7× faster followups** — Sieve ships ~150 tokens per turn; baseline ships the full conversation history. On Llama-3.1-70B: 4.44s → 1.24s p50 on follow-ups. On Qwen-2.5-72B: 10.74s → 1.63s p50.
-- **Zero filler fabrication** — empirically perfect across every measured cell. The three-layer anti-hallucination gate is the safety-critical layer.
-- **Personal-fact fabrication eliminated on small writers** — Qwen3-8B P2 fabrication: 67-74% → 0%, replicated across 4 seeds with mechanical-rule + 2-LLM-grader consensus methodology.
+- **Up to 9× less hallucination** on absence-trap queries — measured across the longitudinal validation runs. Driven by the absence-signal layer (on by default), which refuses to fabricate when a queried fact is not in the store.
 - **Sub-15ms recall** at 100k facts with full production crypto (SQLCipher + partition keys).
 
-Methodology: mechanical literal-text rules (93.7% of adversarial outcomes) + 2-LLM-grader consensus (5.8%) + 0.5% flagged for human review. Full provenance: recall repo tag `v1.1.0-phase3-rc`, audit-surface at [`evaluation/simulator/results/phase3-final/CLAIMS.md`](https://github.com/azardhosein/recall/blob/main/evaluation/simulator/results/phase3-final/CLAIMS.md).
+Headline numbers and methodology overview: [`evaluation/RESULTS_SUMMARY.md`](evaluation/RESULTS_SUMMARY.md). Full methodology and per-category analysis will be published in a forthcoming paper.
 
 <p align="center">
   <img src="docs/figures/token-divergence.svg#gh-dark-mode-only" alt="Sieve compresses while baseline grows — token usage over time" width="720">
@@ -53,8 +52,8 @@ Methodology: mechanical literal-text rules (93.7% of adversarial outcomes) + 2-L
 </p>
 
 <p align="center">
-  <img src="docs/figures/hallucination-bars.svg#gh-dark-mode-only" alt="Baseline vs Sieve — personal-fact fabrication" width="720">
-  <img src="docs/figures/hallucination-bars-light.svg#gh-light-mode-only" alt="Baseline vs Sieve — personal-fact fabrication" width="720">
+  <img src="docs/figures/hallucination-bars.svg#gh-dark-mode-only" alt="Baseline vs Sieve — fabrication rate on absence-trap queries" width="720">
+  <img src="docs/figures/hallucination-bars-light.svg#gh-light-mode-only" alt="Baseline vs Sieve — fabrication rate on absence-trap queries" width="720">
 </p>
 
 <p align="center">
