@@ -987,7 +987,8 @@ def build_uninstall_screen(console) -> MenuScreen:
         "  • Remove ~/.sieve/ (config, store, keys, logs)",
         "",
         "[dim]The llm-sieve Python package stays installed — "
-        "`pip uninstall llm-sieve` removes that separately.[/]",
+        "`pipx uninstall llm-sieve` (or `pip uninstall` for venv "
+        "installs) removes that separately.[/]",
     ]
 
     def _confirm_and_run():

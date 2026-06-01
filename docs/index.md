@@ -10,25 +10,96 @@ hide:
 
 Sieve is a proxy between your agent framework and your LLM endpoint. It strips tool schemas, repeated instructions, and stale history from every outbound turn, rewrites the prompt into a lean payload, and backs retrieval with an encrypted local memory store. Your agent doesn't change. Your endpoint doesn't change. The model just stops drowning in the same 20,000 tokens every turn.
 
+<div class="sieve-hero-stats" markdown>
+
+<div class="sieve-hero-stat" markdown>
+**95%**
+fewer tokens per turn
+</div>
+
+<div class="sieve-hero-stat" markdown>
+**3–7×**
+faster follow-ups
+</div>
+
+<div class="sieve-hero-stat" markdown>
+**< 15 ms**
+recall at 100k facts
+</div>
+
+</div>
+
+<div class="sieve-divider"></div>
+
+## See it in one picture
+
+Same conversation, turn 8. Left: what your agent normally sends. Right: what Sieve forwards to the LLM.
+
+<div class="sieve-compare" markdown>
+
+<div class="sieve-compare-col" markdown>
+
+**Without Sieve — 18,420 tokens**
+
+```text
+system: You are a helpful assistant…
+[ 1,400 tokens of tool schemas ]
+[ 850 tokens of repeated instructions ]
+user: Hi, I'm Alex Chen, a landscape architect…
+assistant: Nice to meet you, Alex!
+user: I love public-park designs…
+assistant: That sounds rewarding…
+[ 14 more turns, full verbatim history ]
+user: Do you remember where I work?
+```
+
+</div>
+
+<div class="sieve-compare-col" markdown>
+
+**With Sieve — 920 tokens**
+
+```text
+system: You are a helpful assistant.
+[ 3 most-recent turns verbatim ]
+
+[ Sieve-injected context ]
+- Alex Chen is a landscape architect
+- Works at GreenThumb Designs
+- Specialises in public parks + gardens
+
+user: Do you remember where I work?
+```
+
+</div>
+
+</div>
+
 <div class="sieve-divider"></div>
 
 ## What you get
 
 <div class="grid cards" markdown>
 
--   ### 95% fewer tokens
+-   :material-cube-outline: **95% fewer tokens**
+
+    ---
 
     Measured invariant across **5 LLM architectures** (Granite, Llama, Qwen, Mistral, GPT-OSS), **2 model-size classes** (8B → 72B), **4 context windows** (8K → 64K), and **5 concurrency levels** (1 → 64).
 
     Range: **92–96%** on 33 measurements; no cell below 92%.
 
--   ### 3–7× faster followups
+-   :material-lightning-bolt-outline: **3–7× faster follow-ups**
+
+    ---
 
     Sieve ships ~150 tokens per turn; baseline ships the full conversation history. Latency drops automatically.
 
     On Llama-3.1-70B at concurrency=1: **4.44s → 1.24s** p50 on follow-ups. On Qwen-2.5-72B: **10.74s → 1.63s** p50.
 
--   ### Zero data leaves your machine
+-   :material-lock-outline: **Zero data leaves your machine**
+
+    ---
 
     Encrypted local store (SQLCipher) for facts and retrieval. No telemetry, no phone-home.
 
@@ -49,6 +120,9 @@ Point your agent at `http://127.0.0.1:11435` instead of your usual LLM endpoint.
 
 The installer asks five short questions: provider type, endpoint, API key (if applicable), model, and writer choice. It auto-detects `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / a running local Ollama and offers them as one-keystroke happy paths. See [Getting started](getting-started.md) for the walk-through.
 
+!!! tip "Prove it works on your hardware"
+    `sieve demo` runs a sandboxed 6-turn conversation, then `sieve benchmark` runs a 15-turn baseline-vs-Sieve comparison with a delta table — both leave your real store untouched.
+
 ## Honest scope
 
 - **Sieve doesn't ship a bundled writer model.** You bring an LLM endpoint; Sieve uses it both for serving your agent and for its internal extraction step. This is by design — a tested in-process small writer doesn't yet meet our quality bar, so we route through the model you already trust. See [the architecture](https://github.com/llmsieve/llm-sieve/blob/main/ARCHITECTURE.md) for why.
@@ -65,13 +139,17 @@ For the marketing site — animated diagrams of Sieve at work, demos, and the fu
 
 <div class="grid cards" markdown>
 
--   ### Get going
+-   :material-rocket-launch-outline: **Get going**
+
+    ---
 
     [**Getting started**](getting-started.md) — install, run `sieve-install`, send your first request.
 
     [**Installation**](installation.md) — every supported install path, with platform notes.
 
--   ### Operate
+-   :material-cog-outline: **Operate**
+
+    ---
 
     [**Configuration**](configuration.md) — every option in `sieve.yaml`.
 
@@ -79,7 +157,9 @@ For the marketing site — animated diagrams of Sieve at work, demos, and the fu
 
     [**Diagnostic headers**](diagnostic-headers.md) — request-level visibility for debugging.
 
--   ### Build
+-   :material-code-tags: **Build**
+
+    ---
 
     [**Source on GitHub**](https://github.com/llmsieve/llm-sieve) — code, issues, releases.
 

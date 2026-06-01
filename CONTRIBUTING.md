@@ -85,7 +85,7 @@ Include:
 ## Security
 
 Do **not** open public issues for security vulnerabilities. See
-[SECURITY.md](SECURITY.md) (when published) or email the maintainer directly.
+[SECURITY.md](SECURITY.md) for how to report them.
 
 ## Code of conduct
 
