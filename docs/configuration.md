@@ -138,9 +138,8 @@ The canonical identity for the conversation. Pinned into fact extraction and use
 
 ```yaml
 profile_owner:
-  name: "Jamie Rivera"
+  name: ""
   aliases:
-    - "Jamie"
     - "I"
     - "me"
     - "the user"
@@ -149,10 +148,10 @@ profile_owner:
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `name` | `"Jamie Rivera"` | Canonical display name. Change this to the actual user's name for a real deployment. |
-| `aliases` | list of common pronouns | Tokens the extractor should resolve back to `name` when it sees them in first-person text. |
+| `name` | `""` (empty) | Canonical display name. Set this to the user's name to pin first-person references back to them — improves extraction quality on long conversations. Empty means extraction works without a pinned identity. |
+| `aliases` | `["I", "me", "the user", "user"]` | Tokens the extractor should resolve back to `name` when it sees them in first-person text. |
 
-For a single-user personal setup, set `name` to the user's name; the defaults for `aliases` are usually fine.
+For a single-user personal setup, set `name` to something like `"Alex Chen"`; the defaults for `aliases` are usually fine.
 
 ### `writer`
 
@@ -246,7 +245,7 @@ If you expose Sieve beyond loopback, set `auth_token` to a random secret and cha
 
 ### `ablation`
 
-Per-subsystem on/off switches. Exposed so you can reproduce ablation measurements and diagnose regressions. **The shipping defaults are what was evaluated** — only change these if you are actively running an experiment.
+Per-subsystem on/off switches. Exposed so you can diagnose regressions and reproduce A/B comparisons. **Leave these at the shipped defaults unless you are running an experiment** — turning subsystems off will change behaviour and quality.
 
 ```yaml
 ablation:
@@ -267,13 +266,11 @@ ablation:
   extreme_summary: true
 ```
 
-The most consequential flags:
+The most user-relevant flags:
 
-- **`absence_signal`** (on). Refuses to fabricate when a recall query targets a fact not in the store. Responsible for the hallucination-reduction numbers.
+- **`absence_signal`** (on). Refuses to fabricate when a recall query targets a fact not in the store. Drives the reduced-hallucination behaviour.
 - **`stage2_writer`** (on). Runs the fact extractor after each turn. Without this the store never grows.
 - **`extreme_summary`** (on). Narrative summariser for long conversations.
-- **`closed_world`** (off). An earlier, stricter absence posture. Permanently off — superseded by `absence_signal`.
-- **`response_verification`** (off). Pattern-based output check. Disabled pending pattern coverage.
 
 ## Common setups
 

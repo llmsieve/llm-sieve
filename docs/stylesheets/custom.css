@@ -216,3 +216,145 @@
 .md-typeset h2 + ul {
   margin-top: 0.6rem;
 }
+
+/* ── Hero stat row (3 big numbers under the lead paragraph) ─── */
+
+.sieve-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 2rem 0 0.5rem 0;
+}
+
+@media (max-width: 600px) {
+  .sieve-hero-stats {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sieve-hero-stat {
+  text-align: center;
+  padding: 1.4rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+[data-md-color-scheme="slate"] .sieve-hero-stat {
+  background: rgba(220, 220, 224, 0.04);
+  border-color: rgba(220, 220, 224, 0.10);
+}
+
+[data-md-color-scheme="default"] .sieve-hero-stat {
+  background: #fafafa;
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* The first paragraph inside a hero stat is the number; the
+ * second is the caption. Style by source order so the markdown
+ * stays clean. */
+.sieve-hero-stat > p:first-child {
+  font-size: 2.4rem;
+  line-height: 1.1;
+  font-weight: 700;
+  margin: 0 0 0.3rem 0;
+  letter-spacing: -0.01em;
+}
+
+.sieve-hero-stat > p:first-child > strong {
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}
+
+.sieve-hero-stat > p:last-child {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+  text-transform: none;
+}
+
+/* ── Before/after compare block ─────────────────────────────── */
+
+.sieve-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
+  margin: 1.5rem 0;
+}
+
+@media (max-width: 800px) {
+  .sieve-compare {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sieve-compare-col {
+  border-radius: 10px;
+  padding: 1rem 1.2rem;
+  border: 1px solid transparent;
+}
+
+[data-md-color-scheme="slate"] .sieve-compare-col {
+  background: rgba(220, 220, 224, 0.03);
+  border-color: rgba(220, 220, 224, 0.08);
+}
+
+[data-md-color-scheme="default"] .sieve-compare-col {
+  background: #fafafa;
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+.sieve-compare-col > p:first-child {
+  margin-top: 0;
+  margin-bottom: 0.6rem;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.sieve-compare-col pre {
+  margin: 0;
+}
+
+/* ── Material icons inside grid-card headings ──────────────── */
+/*
+ * pymdownx.emoji + material extension turns ":material-icon:" into
+ * an inline SVG with class .twemoji. When that sits in a card
+ * heading, render it as a soft accent at a comfortable size and
+ * lift it slightly so it baselines with the heading text.
+ */
+.md-typeset .grid.cards > ul > li > p > .twemoji,
+.md-typeset .grid.cards > ul > li > h3 > .twemoji,
+.md-typeset .grid.cards > ul > li > .twemoji {
+  height: 1.35em;
+  width: 1.35em;
+  vertical-align: -0.25em;
+  margin-right: 0.4rem;
+  color: var(--md-default-fg-color--light);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li > p:first-child .twemoji {
+  color: rgba(220, 220, 224, 0.55);
+}
+
+[data-md-color-scheme="default"] .md-typeset .grid.cards > ul > li > p:first-child .twemoji {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/*
+ * Cards no longer use a leading <h3> — content is icon + bold text
+ * followed by an --- divider and body copy. Give the leading bold
+ * line presence and the divider a softer treatment.
+ */
+.md-typeset .grid.cards > ul > li > p:first-child {
+  margin-top: 0;
+  margin-bottom: 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.md-typeset .grid.cards > ul > li > hr {
+  margin: 0.5rem 0 0.9rem 0;
+  border: 0;
+  height: 1px;
+  background: rgba(125, 125, 140, 0.18);
+}

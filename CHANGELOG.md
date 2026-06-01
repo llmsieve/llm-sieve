@@ -43,22 +43,17 @@ refusal.
   writer step (default) or a dedicated smaller one. Warns when
   the chosen target looks like a reasoning model.
 
-### Docs — Phase 3 numbers + brand-respectful landing page
+### Docs — measured-numbers landing page
 
-`docs/index.md` rewritten to lead with the empirical headline pitch
-backed by the Phase 3 release-candidate evidence (recall repo tag
-`v1.1.0-phase3-rc`):
+`docs/index.md` now leads with the headline pitch backed by measured
+evidence:
 
 * **95% fewer tokens** — invariant across 5 LLM architectures, 8B-72B
   model sizes, 8K-64K windows, 1-64 concurrency
 * **3-7× faster followups** — measured p50s on Llama-70B and Qwen-72B
 * **Sub-15ms recall** at 100k facts with full production crypto
 
-The layout uses grid cards, a confidence-via-transparency "honest
-scope" section, and a discreet desaturated-navy divider style — all
-inside the brand book (teal reserved for the mark, sentence case,
-no drop shadows). Adds the previously-orphan `diagnostic-headers.md`
-to the nav.
+Adds the previously-orphan `diagnostic-headers.md` to the nav.
 
 ### Sundry
 
@@ -69,13 +64,6 @@ to the nav.
   missing an 'http://' or 'https://' protocol" error on valid input.
 * `sieve init` success message now shows configured provider + listen
   URL + a hint about `sieve demo`.
-
-### Methodology
-
-The skip-empty classifier was motivated by a 60-cell measurement
-battery (writer × hardware × optimisation conditions). That research
-+ its design doc, results writeup, test harness, and the pre-release
-audit live in the private evaluation repository, not in this package.
 
 ## [Earlier unreleased work]
 
