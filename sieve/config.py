@@ -156,8 +156,7 @@ class WriterConfig:
     # Skip the S2 LLM call entirely on turns that can't possibly contain
     # extractable facts (filler, social greetings, questions with no
     # proper-noun anchors). Measured to skip ~70% of turns in
-    # representative traffic with no quality loss. See
-    # WRITER_LATENCY_BATTERY_RESULTS.md for the methodology.
+    # representative traffic with no quality loss.
     skip_empty_turns: bool = True
 
 

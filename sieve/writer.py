@@ -1958,8 +1958,7 @@ class MemoryWriter:
         # ~70% of turns that can't contain extractable facts. The
         # existing _s2_gate handles the remaining nuance for borderline
         # cases. Both filters err toward skipping; combined they cut
-        # writer-pass cost dramatically with no measured quality loss
-        # — see WRITER_LATENCY_BATTERY_RESULTS.md.
+        # writer-pass cost dramatically with no measured quality loss.
         s2_candidates: list[ExtractedFact] = []
         if self._stage2_enabled:
             if self._skip_empty_turns:

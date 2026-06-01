@@ -172,7 +172,7 @@ class TestEdgeCases:
 
 class TestPhase3Calibration:
     """Sanity-check that the classifier's behaviour on Phase-3-shaped traffic
-    skips ~70% — matches WRITER_LATENCY_BATTERY_RESULTS.md."""
+    skips ~70% — matches the writer-latency-battery measurement."""
 
     PHASE3_SAMPLE = [
         # 6 substantive_q — none are fact-shares
@@ -228,8 +228,8 @@ class TestPhase3Calibration:
         skipped = sum(1 for text, _ in self.PHASE3_SAMPLE if should_skip_writer(text))
         total = len(self.PHASE3_SAMPLE)
         ratio = skipped / total
-        # Target: at least 50% skipped (conservative — actual measured rate
-        # in WRITER_LATENCY_BATTERY_RESULTS.md is ~70-80%).
+        # Target: at least 50% skipped (conservative — the actual
+        # measured rate from the writer-latency battery is ~70-80%).
         assert ratio >= 0.5, f"Skip rate {ratio:.2f} below 0.5 target"
 
 

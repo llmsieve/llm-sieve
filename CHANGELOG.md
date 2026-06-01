@@ -70,13 +70,12 @@ to the nav.
 * `sieve init` success message now shows configured provider + listen
   URL + a hint about `sieve demo`.
 
-### Methodology + audit artefacts
+### Methodology
 
-* `WRITER_LATENCY_BATTERY_DESIGN.md` + `WRITER_LATENCY_BATTERY_RESULTS.md`
-  — the 60-cell measurement that motivated the skip-empty classifier
-  and the "no bundled writer" decision.
-* `RELEASE_AUDIT.md` — the wizard + docs audit that surfaced this
-  branch's scope.
+The skip-empty classifier was motivated by a 60-cell measurement
+battery (writer × hardware × optimisation conditions). That research
++ its design doc, results writeup, test harness, and the pre-release
+audit live in the private evaluation repository, not in this package.
 
 ## [Earlier unreleased work]
 
