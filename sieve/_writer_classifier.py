@@ -1,13 +1,12 @@
 """Skip-empty classifier — fast pre-filter that decides whether the writer's
 S2 extraction call is worth making.
 
-The S2 LLM call costs ~100-2000 ms per turn depending on writer model. On a
-representative traffic sample (Phase 3 simulator captures, 30-turn matrix
-across 6 intents) **~70% of turns contain no extractable facts**: filler
-("thanks"), social greetings ("hi"), questions ("what's my name?"),
-followups with no named anchor, etc. Calling the writer on these turns
-both wastes latency AND raises the risk of the small writer hallucinating
-content from nothing.
+The S2 LLM call costs ~100-2000 ms per turn depending on writer model. On
+representative agent traffic, roughly 70% of turns contain no extractable
+facts — filler ("thanks"), social greetings ("hi"), questions ("what's my
+name?"), follow-ups with no named anchor, etc. Calling the writer on
+these turns both wastes latency AND raises the risk of the small writer
+hallucinating content from nothing.
 
 This classifier runs in microseconds (regex + string checks only) and
 returns True when the writer call should be skipped. It is designed to
@@ -27,11 +26,9 @@ The heuristics:
      no markers, no proper nouns → SKIP.
   6. Anything else → DO NOT skip (default safe path: let the writer decide).
 
-Empirical validation: the writer-latency battery (60 cells × 30 turns,
-sampled from the Phase 3 simulator captures) measured ~70-80% skip
-rate on this classifier with no fact-share regressions. The battery
-+ its analysis live in the private recall research repository; the
-design decision is summarised here.
+Empirical validation against an offline trace replay measured roughly
+70-80% skip rate on representative agent conversations with no
+fact-share regressions.
 
 The classifier is intentionally a regex/string heuristic rather than an
 ML model so it stays:

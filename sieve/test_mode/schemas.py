@@ -3,12 +3,12 @@
 These schemas define the wire contract for ``/test/control/*`` requests/
 responses and ``/test/events`` SSE payloads. The schemas are versioned
 (``PROTOCOL_VERSION``); breaking changes bump the major version. An
-internal test harness (separate repo) consumes these schemas and fails
-fast on Pydantic validation errors if drift occurs — the Sieve runtime
+test harness on the other end consumes these schemas and fails fast
+on Pydantic validation errors if drift occurs — the Sieve runtime
 keeps working regardless.
 
-CARDINAL RULE: this module defines the runtime side of the contract
-authoritatively. Internal test code must never be imported here.
+This module defines the runtime side of the contract authoritatively.
+No harness code is imported here.
 """
 from __future__ import annotations
 

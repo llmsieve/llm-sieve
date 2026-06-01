@@ -10,9 +10,9 @@ Mounted on the app ONLY when ``SIEVE_TEST_MODE=on``. Provides:
 - ``GET  /test/state``
 - ``GET  /test/events``  (SSE stream)
 
-CARDINAL RULE: this module touches Sieve runtime via narrow interfaces
-(state shared with main.py via ``app.state``). It does NOT contain test
-logic — test logic lives in a separate internal harness.
+This module touches Sieve runtime via narrow interfaces (state shared
+with main.py via ``app.state``). It does NOT contain test logic —
+test logic belongs in whatever harness drives this protocol.
 """
 from __future__ import annotations
 

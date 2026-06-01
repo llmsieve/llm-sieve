@@ -13,8 +13,9 @@ each turn / writer completion / phase transition. The bus enqueues to
 all active subscribers and appends to the ring buffer. SSE consumers
 get a typed JSON line per event.
 
-CARDINAL RULE: no test logic in this module. It is plumbing for the
-protocol surface only. Scenarios, hypotheses, grading happen elsewhere.
+This module is plumbing for the protocol surface only — it carries no
+test logic of its own. Scenarios, hypotheses, and grading belong in
+whatever harness drives the protocol.
 """
 from __future__ import annotations
 

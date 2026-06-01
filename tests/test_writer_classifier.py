@@ -5,8 +5,8 @@ a real fact-share) are expensive; false-negatives (an unnecessary writer
 call) are cheap. Tests therefore lean heavily on the SKIP=False direction
 to verify nothing fact-bearing is missed.
 
-The skip-true cases are also tested but with explicit examples drawn from
-the Phase 3 simulator's representative traffic.
+The skip-true cases are also tested with explicit representative examples
+drawn from typical agent traffic.
 """
 
 from __future__ import annotations

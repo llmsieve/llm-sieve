@@ -29,8 +29,6 @@ Three tapes, three stories. All 1200×700, Catppuccin Mocha, rendered from VHS t
 | `sieve-wizard.gif` | `sieve-wizard.tape` | Interactive management menu. Navigates Service → Status, Store → Last 10 facts, back to the top menu showing state. |
 | `sieve-benchmark.gif` | `sieve-benchmark.tape` | Real benchmark run replay: 15-turn medium fixture → 90% token reduction, ending on the hero "Sieve sent 90% fewer tokens" banner. |
 
-The older `sieve-demo.gif` and `sieve-wizard-install.gif` predate the `sieve-install` / `sieve wizard` split and are kept in the repo for backwards compatibility with any existing embeds. New embeds should use the three GIFs above.
-
 ## Rendering the GIFs
 
 The supported render path is Docker — native VHS crashes on some Debian kernels due to chromium zygote sandboxing. The `branding/Dockerfile.vhs` image ships `llm-sieve` pre-installed plus a cached FastEmbed ONNX model so recordings don't contain HuggingFace download clutter.
@@ -80,9 +78,9 @@ OLLAMA_HOST_IP=10.0.0.42 FORCE_DOCKER=1 ./branding/render-gifs.sh all
 
 This keeps the rendered GIFs free of anyone's home LAN IP while letting the render actually hit a real server during the (hidden) preparation steps.
 
-## Vendor-agnostic recording (v1-rc and later)
+## Vendor-agnostic recording
 
-`sieve-wizard-install.tape` has been updated to record the new 5-branch provider picker (Anthropic / OpenAI / OpenAI-compatible / Ollama / Custom). To keep the GIF vendor-neutral, the tape picks option 3 (OpenAI-compatible) and points the wizard at a generic stub URL.
+`sieve-quick-install.tape` records the 5-branch provider picker (Anthropic / OpenAI / OpenAI-compatible / Ollama / Custom). To keep the GIF vendor-neutral, the tape picks option 3 (OpenAI-compatible) and points the wizard at a generic stub URL.
 
 For the stub URL to actually respond during recording, start `branding/stub_provider.py` alongside the renderer:
 
@@ -91,9 +89,9 @@ For the stub URL to actually respond during recording, start `branding/stub_prov
 python branding/stub_provider.py &
 
 # Terminal 2: render the tape
-./branding/render-gifs.sh wizard
+./branding/render-gifs.sh quick
 ```
 
 The stub serves both OpenAI-compatible (`/v1/models`, `/v1/chat/completions`) and Ollama-compatible (`/api/tags`, `/api/chat`) endpoints with canned responses. It's purpose-built for recording — no production use. See `branding/stub_provider.py` for the surface.
 
-When recording, point sieve-install at `http://127.0.0.1:8765/v1` (when picking option 3) — the rendered GIF will simply show the generic URL, not endorse any specific cloud provider. The principle is: Sieve works with any OpenAI-compatible endpoint you bring.
+When recording, point sieve-install at `http://127.0.0.1:8765/v1` (option 3) — the rendered GIF shows a generic URL, not any specific cloud provider. Sieve works with any OpenAI-compatible endpoint you bring.

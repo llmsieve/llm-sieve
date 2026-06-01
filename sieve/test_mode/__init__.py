@@ -1,18 +1,18 @@
-"""Sieve test-mode module — internal protocol surface for evaluation.
+"""Sieve test-mode module — opt-in protocol surface for external harnesses.
 
 Loaded ONLY when ``SIEVE_TEST_MODE=on`` env var is set. In production mode
 this module is not imported and the ``/test/*`` endpoints are not mounted
 (404 on any request).
 
-This module exposes a stable versioned protocol used by an internal test
-harness (separate from this repo) for benchmark and evaluation work:
+This module exposes a stable versioned protocol that an external test
+harness can drive to script Sieve for benchmark and evaluation work:
 
 - **Control plane:** REST endpoints under ``/test/control/*`` and ``/test/state``
 - **Telemetry plane:** Server-Sent Events stream at ``/test/events``
 
-CARDINAL RULE: this module is *protocol surface only*, not test logic.
-No scenario YAMLs, no graders, no report generators here. The harness
-that consumes this surface lives in a separate internal repo.
+This module is *protocol surface only*, not test logic. No scenario
+runners, no graders, no report generators — those belong in the
+harness that drives this protocol.
 """
 from __future__ import annotations
 

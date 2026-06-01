@@ -4,8 +4,9 @@
 #
 # Usage:
 #   branding/render-gifs.sh quick      # renders sieve-quick-install.gif
-#   branding/render-gifs.sh wizard     # renders sieve-wizard-install.gif
-#   branding/render-gifs.sh all        # renders both
+#   branding/render-gifs.sh wizard     # renders sieve-wizard.gif
+#   branding/render-gifs.sh benchmark  # renders sieve-benchmark.gif
+#   branding/render-gifs.sh all        # renders all three
 #
 # Requirements (one of):
 #   - Native VHS (go install github.com/charmbracelet/vhs@latest) + ttyd + ffmpeg, OR
