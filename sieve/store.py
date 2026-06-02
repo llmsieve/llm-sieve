@@ -24,6 +24,47 @@ from sieve.config import StoreConfig
 logger = logging.getLogger("recall.store")
 
 
+# Schema version written to PRAGMA user_version on init and on any
+# future schema-bumping migration. Read at open() to detect a
+# rollback-to-older-package scenario (store has been migrated to a
+# schema this package doesn't understand) — fail loudly rather than
+# silently corrupt.
+#
+# Version history:
+#   1 — initial v1.0.0 release schema (Apache 2.0 public release).
+#       Stores created by code older than this carry user_version=0
+#       (SQLite default); they're treated as version 1 on first open
+#       after upgrading to a version-aware Sieve.
+SCHEMA_VERSION = 1
+
+
+class StoreSchemaTooNewError(RuntimeError):
+    """Raised at store open() if the on-disk schema is newer than the
+    installed Sieve package understands. This indicates a downgrade:
+    the user upgraded Sieve (which migrated the store forward), then
+    rolled back to an older release that doesn't know how to read the
+    migrated schema. Refusing to open is strictly safer than
+    optimistically running against an unknown schema.
+
+    Recovery: re-upgrade to the version that wrote the newer schema
+    (or higher), OR restore from a pre-upgrade backup via
+    `sieve backup restore`."""
+
+    def __init__(self, store_version: int, package_version: int, store_path: str):
+        super().__init__(
+            f"Store at {store_path} is on schema version {store_version}, "
+            f"but this Sieve package only understands up to version "
+            f"{package_version}. This usually means you rolled back to "
+            f"an older Sieve release after upgrading. To recover: "
+            f"(1) re-upgrade to a Sieve version >= the one that wrote "
+            f"this store, OR (2) `sieve backup restore <backup-id>` to "
+            f"restore the store from a backup taken before the upgrade."
+        )
+        self.store_version = store_version
+        self.package_version = package_version
+        self.store_path = store_path
+
+
 class EmbeddingDimensionMismatchError(RuntimeError):
     """Raised when the store's on-disk embeddings don't match the active
     embedding backend's dimension. A switch between FastEmbed (384) and
@@ -287,7 +328,14 @@ class MemoryStore:
         return self._conn
 
     def open(self) -> None:
-        """Open the encrypted database and load extensions."""
+        """Open the encrypted database and load extensions.
+
+        After the connection is established, checks the on-disk
+        schema version against ``SCHEMA_VERSION``. Raises
+        ``StoreSchemaTooNewError`` if the store carries a schema
+        newer than this package understands — that's a rollback
+        scenario and refusing to open is safer than corrupting data.
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self._passphrase is None:
@@ -307,6 +355,26 @@ class MemoryStore:
         self._conn.enable_load_extension(True)
         sqlite_vec.load(self._conn)
         self._conn.enable_load_extension(False)
+
+        # Schema-version guard. PRAGMA user_version is a 32-bit
+        # integer in the SQLite db header; default is 0 for stores
+        # written by code older than the version-aware Sieve. We
+        # treat 0 as "legacy v1.0.0 store" (it's structurally
+        # compatible with SCHEMA_VERSION=1) and only block when the
+        # store is on a version strictly greater than what we
+        # understand.
+        row = self._conn.execute("PRAGMA user_version").fetchone()
+        store_version = int(row[0]) if row else 0
+        if store_version > SCHEMA_VERSION:
+            # Close before raising so the connection isn't left
+            # dangling — caller can't open() retry until they fix it.
+            self._conn.close()
+            self._conn = None
+            raise StoreSchemaTooNewError(
+                store_version=store_version,
+                package_version=SCHEMA_VERSION,
+                store_path=str(self.db_path),
+            )
 
     def close(self) -> None:
         """Close the database connection."""
@@ -350,6 +418,14 @@ class MemoryStore:
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_episodes "
             f"USING vec0(episode_id TEXT PRIMARY KEY, embedding float[{dim}])"
         )
+        # Stamp the schema version. Only advance, never lower —
+        # protects against init_schema being run on a store that's
+        # been migrated forward by a newer Sieve.
+        row = self.conn.execute("PRAGMA user_version").fetchone()
+        current = int(row[0]) if row else 0
+        if current < SCHEMA_VERSION:
+            # PRAGMA doesn't support parameterised values
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
     def is_initialized(self) -> bool:

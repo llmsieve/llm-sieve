@@ -72,6 +72,110 @@ docs deploy will pass.
 - Type hints on public APIs
 - Tests alongside new code
 
+## Versioning and release policy
+
+Sieve follows [Semantic Versioning](https://semver.org/). The
+contract Sieve makes with its users — and that contributors should
+keep in mind when proposing changes — is:
+
+### PATCH releases (1.0.x)
+
+- Bug fixes
+- Documentation improvements
+- Performance wins that don't change observable behaviour
+- Forward-and-backward-compatible store-schema migrations
+  (e.g. an added column with a safe default)
+
+**User expectation:** safe to upgrade unconditionally. No backup
+required. Released as fixes accumulate; no schedule.
+
+### MINOR releases (1.x.0)
+
+- New optional features
+- New config keys (with safe defaults — existing configs must keep
+  working)
+- Additional CLI subcommands
+- Forward-only store-schema migrations that the writer can apply
+  automatically on first run
+
+**User expectation:** safe to upgrade with `pipx upgrade`. A backup
+is recommended for users with significant accumulated data.
+Released when meaningful features accumulate.
+
+### MAJOR releases (X.0.0 → (X+1).0.0)
+
+- Behaviour changes
+- Dropped CLI subcommands
+- Backward-incompatible store-schema migrations
+- Config-key renames or removals
+- Raised minimum Python version
+- Dropped LLM-provider support
+
+**User expectation:** read the CHANGELOG migration notes; back up
+first; test in a non-production context. Released at most once a
+year. Pre-announce by ≥4 weeks. Publish a migration guide
+alongside the release.
+
+### Security releases
+
+Anything with CVE-class implications ships within **7 days** of a
+confirmed report, regardless of the standard cadence above.
+Communicated via:
+
+- A GitHub Security Advisory
+- A patch-level release with a `SECURITY:` prefix in the CHANGELOG
+- A pinned issue for the duration of the affected versions
+
+The private reporting channel is documented in
+[SECURITY.md](SECURITY.md).
+
+### When proposing a breaking change
+
+A change is breaking if it:
+
+- Removes or renames a CLI command, subcommand, or flag
+- Removes or renames a config key (or makes a previously-optional
+  key required)
+- Changes the store-schema in a way that prior versions can't read
+- Raises the minimum Python version
+- Drops support for an LLM provider that previously worked
+
+If your PR contains a breaking change, please:
+
+1. Flag it in the PR description with a `**Breaking change**` line
+   and a one-paragraph explanation of why the breakage is
+   necessary.
+2. Propose a deprecation window if a compatibility shim is
+   feasible — usually one MINOR release with a `DeprecationWarning`
+   before removal in the next MAJOR.
+3. Draft the CHANGELOG entry under an explicit `### Breaking`
+   subsection.
+
+Breaking changes don't have to be rejected — they just have to be
+deliberate.
+
+### Schema versioning
+
+The encrypted store carries a `PRAGMA user_version` integer that's
+written at init time and bumped by any future schema-migration
+code (`sieve.store.SCHEMA_VERSION`). If you're proposing a schema
+change:
+
+- **Backward-compatible additions** (new column with a safe
+  default, new index, new optional table) → no version bump
+  needed; the existing migrator handles them via idempotent
+  `ALTER TABLE`.
+- **Required schema changes** (a new column the proxy assumes
+  exists at startup, a renamed column, a table whose shape
+  changed) → bump `SCHEMA_VERSION` and add the migration to
+  `init_schema()` keyed off the read `user_version`. Stores on
+  older versions get migrated forward on first open; stores on
+  newer versions trigger `StoreSchemaTooNewError` and refuse to
+  open (the rollback-safety guard).
+
+The guard's behaviour and the recovery path for users are
+documented in [installation.md → Rolling back](docs/installation.md#rolling-back).
+
 ## Reporting bugs
 
 Include:

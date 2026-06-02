@@ -406,6 +406,23 @@ def _read_pid(pid_file: Path = PID_FILE) -> int | None:
 
 
 @cli.command()
+def update():
+    """Check PyPI for a newer Sieve release. On-request, no auto-check.
+
+    Compares your installed version against the latest published on
+    pypi.org. If a newer version is available, prints the upgrade
+    command for your install path plus a link to the release notes.
+
+    Sieve does NOT check for updates automatically. This command is
+    the only path that talks to PyPI on your behalf, and it only
+    runs when you invoke it.
+    """
+    from sieve.cli_update import run_update_check
+    import sys as _sys
+    _sys.exit(run_update_check(console=console))
+
+
+@cli.command()
 @click.option("--port", "-p", default=None, type=int,
               help="Check the daemon on this listen port (default: read from config)")
 def status(port: int | None):

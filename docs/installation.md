@@ -196,12 +196,115 @@ CMD ["sieve", "start", "--host", "0.0.0.0"]
 
 Mount a host directory at `/root/.sieve` to persist the store across restarts.
 
-## Upgrading
+## Updating
+
+Sieve does not check for updates automatically. To find out if a
+newer version is available, run:
 
 ```bash
-pipx upgrade llm-sieve        # or: pip install --upgrade llm-sieve inside your venv
-sieve status                  # sanity-check
+sieve update
 ```
+
+That single command queries `pypi.org/pypi/llm-sieve/json`, prints
+your installed version, the latest published version, and — if
+they differ — the exact upgrade command for your install path plus
+a link to the release notes. It is the only path in Sieve that
+talks to PyPI on your behalf, and it only runs when you invoke it.
+
+### Performing the upgrade
+
+```bash
+pipx upgrade llm-sieve              # if installed via pipx (recommended)
+pip install --upgrade llm-sieve     # if installed via pip into a venv
+```
+
+If you installed from source: `git pull && pip install -e ".[dev]"`.
+
+After upgrading the package, restart the proxy so it picks up the
+new code:
+
+```bash
+sieve restart
+sieve status                # sanity-check — should print the new version
+```
+
+### What survives an upgrade
+
+Everything in `~/.sieve/` — your config, encrypted memory store,
+keyfile, and backups — is owned by you, not by the package.
+`pipx upgrade` and `pip install --upgrade` only touch the Python
+package's own files; they never write to `~/.sieve/`. Your
+accumulated facts are safe.
+
+### Store-schema migrations
+
+If a new release requires a store-schema change, Sieve migrates
+the store automatically the first time the new proxy opens it. You
+don't need to run a separate command. The migration is forward-only
+and is logged to `~/.sieve/audit.log` if you want to audit the
+change.
+
+For major (X.0.0) releases that change the schema in a
+*backward-incompatible* way, the CHANGELOG entry will say so
+explicitly and we recommend a backup first:
+
+```bash
+sieve backup create
+pipx upgrade llm-sieve
+sieve restart
+```
+
+### Versioning policy
+
+Sieve follows [Semantic Versioning](https://semver.org/):
+
+- **PATCH** (1.0.x) — bug fixes, doc improvements, perf wins.
+  Safe to upgrade unconditionally.
+- **MINOR** (1.x.0) — new features, new config keys with safe
+  defaults, additional CLI commands. Safe to upgrade with
+  `pipx upgrade`. A backup is recommended if you've accumulated
+  significant data.
+- **MAJOR** (X.0.0) — behaviour changes, dropped CLI subcommands,
+  backward-incompatible schema migrations, config-key renames. Read
+  the CHANGELOG migration notes; back up first; test in a
+  non-production context if you can.
+- **Security releases** ship within 7 days of a confirmed report,
+  regardless of cadence. See [SECURITY.md](https://github.com/llmsieve/llm-sieve/blob/main/SECURITY.md).
+
+## Rolling back
+
+If a new release misbehaves, pinning back to the previous version
+is the supported rollback:
+
+```bash
+# pipx — pin to a specific version
+pipx install --force llm-sieve==1.0.0
+
+# pip into a venv
+pip install --force-reinstall llm-sieve==1.0.0
+```
+
+Then `sieve restart`.
+
+**About the memory store on a rollback.** If you only upgraded
+between releases of the same major series (e.g. 1.0.0 → 1.1.0 →
+back to 1.0.0), the store will open cleanly. Sieve refuses to
+start if it detects the store has been migrated to a schema newer
+than the installed package supports — clear message, no silent
+corruption. In that situation:
+
+```bash
+# 1. Restore from a backup taken before the upgrade
+sieve backup list
+sieve backup restore <backup-id>
+
+# 2. Or: re-upgrade to the version that wrote the newer schema,
+#    use sieve store export to dump the data, then downgrade and
+#    re-import.
+```
+
+The first path is by far the simplest; this is why we suggest
+`sieve backup create` before major upgrades.
 
 ## Uninstalling
 
