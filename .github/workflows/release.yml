@@ -1,0 +1,55 @@
+name: Publish to PyPI
+
+# Fires when a v* tag is pushed. Tag the release commit on main,
+# push the tag, this workflow builds the wheel + sdist and publishes
+# them to PyPI via OIDC trusted publishing — no API token needed.
+#
+# Trusted-publisher binding on PyPI: project=llm-sieve, owner=llmsieve,
+# repo=llm-sieve, workflow=release.yml, environment=pypi-publish.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      # Required for OIDC token minting — the runner trades this for
+      # a short-lived PyPI upload credential.
+      id-token: write
+      # actions/checkout needs read on the repo contents.
+      contents: read
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: Build wheel + sdist
+        run: |
+          python -m build
+
+      - name: Verify artefacts
+        # Quick sanity check — abort the publish if the wheel or sdist
+        # don't pass the same twine check we run locally during release
+        # prep. Catches metadata issues before they hit PyPI.
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - name: Publish to PyPI
+        # No `with: password:` — OIDC trusted publishing is automatic
+        # when `id-token: write` + the matching trusted-publisher entry
+        # exists on PyPI. The action handles the token exchange.
+        uses: pypa/gh-action-pypi-publish@release/v1
