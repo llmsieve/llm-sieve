@@ -1,0 +1,27 @@
+{#-
+  Inline the Sieve lockup (icon + wordmark) so `currentColor` resolves
+  to the header text color and the brand is visible on both themes.
+  The wider viewBox renders the full lockup rather than just the icon.
+-#}
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 64" role="img" aria-label="Sieve" class="md-header__logo-svg">
+  <title>Sieve</title>
+  <desc>Sieve logo: filter icon with wordmark.</desc>
+  <g fill="currentColor">
+    <circle cx="10" cy="8" r="1.6"/>
+    <circle cx="20" cy="6" r="1.6"/>
+    <circle cx="32" cy="9" r="1.6"/>
+    <circle cx="44" cy="6" r="1.6"/>
+    <circle cx="54" cy="8" r="1.6"/>
+    <circle cx="15" cy="14" r="1.6"/>
+    <circle cx="27" cy="15" r="1.6"/>
+    <circle cx="38" cy="14" r="1.6"/>
+    <circle cx="49" cy="15" r="1.6"/>
+  </g>
+  <path d="M6 24 L28 46" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <path d="M58 24 L36 46" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <circle cx="32" cy="56" r="2.8" fill="#0D9488"/>
+  <text x="80" y="46"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="48" font-weight="500" letter-spacing="-2"
+        fill="currentColor">Sieve</text>
+</svg>

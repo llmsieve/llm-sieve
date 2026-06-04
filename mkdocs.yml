@@ -1,0 +1,91 @@
+site_name: Sieve
+site_description: Transparent context reduction for LLMs.
+site_url: https://llmsieve.dev
+repo_url: https://github.com/llmsieve/llm-sieve
+repo_name: llmsieve/llm-sieve
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  logo: assets/sieve-icon.svg
+  favicon: assets/sieve-icon-favicon.svg
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - navigation.tabs
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    # Fold the per-page table of contents into the left navigation
+    # instead of showing it as a separate right-hand column.
+    - toc.integrate
+
+extra_css:
+  - stylesheets/custom.css
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - CLI reference: cli-reference.md
+  - Diagnostic headers: diagnostic-headers.md
+  - Changelog: changelog.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      # Allow including files from outside docs/ (e.g. CHANGELOG.md at
+      # repo root) via the --8<-- include directive.
+      base_path:
+        - docs
+        - .
+      check_paths: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/llmsieve/llm-sieve
+      name: Sieve on GitHub
+  generator: false
+
+copyright: Copyright &copy; 2026 Azard Tennant-Hosein. Licensed under Apache 2.0. Patent pending GB2608859.1.

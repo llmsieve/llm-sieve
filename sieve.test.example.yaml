@@ -1,0 +1,73 @@
+# sieve.test.example.yaml — advanced-dial reference for SIEVE_MODE=test
+#
+# Copy to ~/.sieve/sieve.test.yaml and uncomment the dials you want to
+# override. Every key below is in the ADVANCED_KEYS surface
+# (sieve/config_surfaces.py); production-mode startup will refuse to
+# load any of them. Run `SIEVE_MODE=test sieve start` to activate.
+#
+# Rationale: these dials exist so researchers and power users can
+# sweep behavioural parameters without editing source. Each has a
+# sensible hardcoded default in production. Only override when you
+# have a specific reason — unexpected defaults are often correct.
+
+# -----------------------------------------------------------------------
+# pipeline — outbound payload budget scaling
+# -----------------------------------------------------------------------
+
+# pipeline:
+#   budget_scale_threshold: 16384      # auto-scale kicks in when upstream_ctx > this
+#   budget_floor: 4000                 # minimum budget on auto-scale path
+#   budget_ceiling: 32768              # maximum budget on auto-scale path
+#   extreme_threshold_tokens: 25000    # inbound size triggering narrative summariser
+#   extreme_target_tokens: 500         # narrative summary length target
+
+# -----------------------------------------------------------------------
+# retrieval — vector search + reranker dials
+# -----------------------------------------------------------------------
+
+# retrieval:
+#   max_facts: 15                      # hard cap on facts returned by retrieval
+#   context_tokens: 1300               # retrieval-block token cap
+#   mmr_lambda: 0.7                    # diversity vs relevance in MMR (0..1, higher = more relevant)
+#   mmr_enabled: true                  # kill-switch for MMR re-ranking
+#   confidence_floor: 0.40             # fact confidence cutoff
+#   dedup_similarity: 0.9              # content dedup threshold
+#   temporal_dedup_similarity: 0.85    # temporal dedup threshold
+#   graph_reserve: 3                   # graph-hop slot budget
+#   decompose_max_subqueries: 4
+#   decompose_min_subqueries: 2
+#   decompose_max_tokens: 160
+#   absence_coverage_gate: 0.5         # absence-signal coverage threshold
+#   absence_coverage_denominator: 100  # coverage denominator (facts_count / this)
+
+# -----------------------------------------------------------------------
+# writer — fact extraction + supersession tuning
+# -----------------------------------------------------------------------
+
+# writer:
+#   conflict_similarity: 0.95          # polarity-conflict detection threshold
+#   dedup_distance: 0.12               # writer dedup distance
+#   s2_timeout_s: 120.0                # per-call timeout for S2 extraction
+#   episode_max_tokens: 96             # episode summariser output cap
+#   episode_timeout_s: 30.0            # episode summariser timeout
+#   session_coherence_window: 10       # messages kept in session-coherence scan
+#   max_sessions: 50                   # session-eviction cap
+
+# -----------------------------------------------------------------------
+# classifier / tools
+# -----------------------------------------------------------------------
+
+# classifier:
+#   min_retrieval_length: 4            # minimum query length for retrieval
+#   l1_threshold: 0.55                 # L1 similarity cutoff
+
+# tools:
+#   fallback_min_words: 5              # word count for fallback tool-set
+#   recall_max_rounds: 5               # recall-tool iteration cap
+
+# -----------------------------------------------------------------------
+# provider — transport tuning
+# -----------------------------------------------------------------------
+
+# provider:
+#   read_timeout_s: 300                # upstream HTTP read timeout

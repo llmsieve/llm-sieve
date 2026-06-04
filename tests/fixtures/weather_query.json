@@ -1,0 +1,24 @@
+{
+  "model": "qwen2.5:1.5b",
+  "stream": false,
+  "messages": [
+    {"role": "user", "content": "What is the weather like in Tokyo today?"}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "web_search",
+     "description": "Search the web for current information.",
+     "parameters": {"type": "object",
+       "properties": {"query": {"type": "string"}},
+       "required": ["query"]}}},
+    {"type": "function", "function": {"name": "read_file",
+     "description": "Read a file from the filesystem.",
+     "parameters": {"type": "object",
+       "properties": {"path": {"type": "string"}},
+       "required": ["path"]}}},
+    {"type": "function", "function": {"name": "save_note",
+     "description": "Remember a note for later recall.",
+     "parameters": {"type": "object",
+       "properties": {"text": {"type": "string"}},
+       "required": ["text"]}}}
+  ]
+}

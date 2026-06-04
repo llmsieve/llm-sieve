@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# FastEmbed downloads BAAI/bge-small-en-v1.5 (~50 MB of ONNX
+# artefacts) on first use. HuggingFace's CDN occasionally rate-limits
+# the shared GitHub Actions runner IPs with 429 Too Many Requests,
+# which makes CI flaky on otherwise-clean PRs. We cache the model
+# directory across runs so HF is hit at most once per cache cycle,
+# not once per CI run.
+env:
+  FASTEMBED_CACHE_PATH: /home/runner/.cache/fastembed
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache FastEmbed model
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/fastembed
+          # Stable key — the model itself (BAAI/bge-small-en-v1.5)
+          # only changes when we bump its name in source code. If
+          # that ever happens, the cache key should change too.
+          key: fastembed-bge-small-en-v1.5-${{ runner.os }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Pre-cache FastEmbed model
+        # Pull the model into the cache directory before tests run.
+        # If actions/cache restored a hit, this is a no-op (~1s).
+        # If the cache missed, this fetches once and the result is
+        # saved to the cache at job-end. Either way, test collection
+        # no longer races HF rate limits.
+        run: |
+          python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -x --tb=short
+
+  docs:
+    # Catch docs regressions (broken links, orphan pages, snippet
+    # include failures) before they hit the published site. Strict
+    # mode is the same flag CONTRIBUTING.md tells local devs to use.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+      - name: Build docs (strict)
+        run: |
+          mkdocs build --strict
