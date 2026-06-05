@@ -133,6 +133,8 @@ The installer asks five short questions: provider type, endpoint, API key (if ap
 
 For the marketing site — animated diagrams of Sieve at work, demos, and the full pitch — visit [**llmsieve.com**](https://llmsieve.com). This site (`llmsieve.dev`) is the developer reference.
 
+If you arrived here looking for the research framework that prunes LLM model weights, that's a separate project also called LLM-Sieve — see [arXiv 2505.18350](https://arxiv.org/abs/2505.18350). Sieve (this project) operates on **prompts**, not weights.
+
 <div class="sieve-divider"></div>
 
 ## Reference

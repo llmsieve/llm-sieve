@@ -21,6 +21,8 @@ Sieve sits between your agent framework and your LLM endpoint. It watches the tr
 - **Documentation:** [llmsieve.dev](https://llmsieve.dev)
 - **Source:** [github.com/llmsieve/llm-sieve](https://github.com/llmsieve/llm-sieve)
 
+> *Looking for something different?* Sieve is a runtime proxy that shrinks the **prompts** sent to an LLM. If you're looking for the research framework that shrinks **model weights** by the same name, that's [LLM-Sieve (arXiv 2505.18350)](https://arxiv.org/abs/2505.18350) — separate work at a different layer of the stack.
+
 ## Why Sieve
 
 Agent frameworks pay for context three ways: tokens billed per call, latency that grows with payload size, and accuracy that degrades as the prompt gets noisier. The usual response — "just use a bigger context window" — moves the cost rather than removing it.
