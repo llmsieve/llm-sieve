@@ -1,0 +1,100 @@
+name: Bug report
+description: Something in Sieve isn't behaving as documented or expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. The more concrete
+        the details, the faster we can reproduce and fix.
+
+        **Security issues:** please do NOT use this form — see
+        [SECURITY.md](https://github.com/llmsieve/llm-sieve/blob/main/SECURITY.md)
+        for the private reporting channel.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: |
+        Concrete description of the unexpected behaviour. What did you
+        do, what did you see, what did you expect to see?
+      placeholder: |
+        I ran `sieve demo` and on turn 3, instead of recalling the
+        fact I'd shared earlier, the model gave an unrelated answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Smallest reproducible sequence. Copy-paste-able commands are
+        ideal. If the bug involves a specific config or input, include
+        them here.
+      placeholder: |
+        1. `pipx install llm-sieve`
+        2. `sieve-install --no-input --provider http://localhost:11434 --model qwen3:14b`
+        3. `sieve demo`
+        4. On turn 3, expected X but got Y.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: sieve-version
+    attributes:
+      label: Sieve version
+      description: Output of `sieve --version`
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python3 --version`
+      placeholder: "3.12.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows (WSL2)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: LLM provider + model
+      description: What LLM is Sieve forwarding to? Ollama, vLLM, OpenAI, Anthropic, etc.
+      placeholder: "Ollama / qwen3:14b"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Output from `sieve status`, error messages, or proxy logs. Strip
+        anything sensitive before pasting (API keys, real user data, etc.).
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: |
+        Optional. Anything you think might be relevant — recent config
+        changes, environment quirks, when the problem started.

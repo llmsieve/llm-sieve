@@ -1,0 +1,67 @@
+name: Feature request
+description: Suggest an enhancement, new capability, or change to existing behaviour.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Feature requests that explain the
+        underlying need (rather than jumping straight to a solution)
+        are easier to evaluate and tend to land sooner.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        What are you trying to do that Sieve doesn't currently support
+        well? Concrete use case is more useful than abstract wish.
+      placeholder: |
+        I want to use Sieve with multiple agents on the same machine,
+        each with its own memory store. Currently Sieve only supports
+        one store per process.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: |
+        What you think Sieve should do. CLI flags, config keys, API
+        shapes — whatever's most natural for the change. Don't worry
+        about implementation detail.
+      placeholder: |
+        `sieve start --config ./agent-a.yaml` and `sieve start --config
+        ./agent-b.yaml` should each run their own proxy on different
+        ports, with separate stores.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Optional. What workarounds have you tried? What other
+        approaches did you consider before suggesting this one?
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Who else benefits?
+      description: |
+        Optional. Is this just for you, or are there others who'd
+        find it useful? Helps with prioritisation — broadly-useful
+        features tend to land sooner than single-user requests.
+
+  - type: checkboxes
+    id: breaking
+    attributes:
+      label: Breaking change?
+      description: Best-guess assessment of whether this would break existing users.
+      options:
+        - label: This is purely additive — no existing behaviour changes
+        - label: This would change existing behaviour but not break compatibility
+        - label: This would be a breaking change (would justify a major version bump)
+        - label: Not sure
