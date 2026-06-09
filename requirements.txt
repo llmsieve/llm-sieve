@@ -1,0 +1,8 @@
+# Build-time dependencies for the docs site at llmsieve.dev.
+#
+# Used by the Cloudflare Pages build job, which prefers a
+# requirements.txt at the repo root over reading the pyproject.toml
+# `[docs]` extra. Keep in sync with the docs optional-dep in
+# pyproject.toml.
+mkdocs-material>=9.5
+mkdocs-rss-plugin>=1.17
