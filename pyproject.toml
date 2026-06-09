@@ -46,6 +46,7 @@ dev = [
 ]
 docs = [
     "mkdocs-material>=9.5",
+    "mkdocs-rss-plugin>=1.17",
 ]
 
 [project.scripts]
