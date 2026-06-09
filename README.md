@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/llmsieve/llm-sieve/v1.0.0/branding/sieve-lockup.svg" alt="Sieve" width="280">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/llmsieve/llm-sieve/v1.0.0/branding/sieve-lockup-dark.svg">
+    <img src="https://raw.githubusercontent.com/llmsieve/llm-sieve/v1.0.0/branding/sieve-lockup-light.svg" alt="Sieve" width="280">
+  </picture>
 </p>
 
 <p align="center"><strong>Transparent context reduction for LLMs.</strong></p>
