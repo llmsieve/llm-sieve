@@ -204,6 +204,23 @@
   font-weight: 600;
 }
 
+/* ── Blog charts ─────────────────────────────────────────────
+ *
+ * SVG charts in blog posts are authored with transparent
+ * backgrounds and brand-matched colours so they read on both
+ * the dark and light themes. Constrain the maximum width so
+ * a 1100px source SVG doesn't dominate narrow text columns,
+ * and centre them in the article body.
+ * ────────────────────────────────────────────────────────── */
+.md-typeset img.sieve-blog-chart,
+.md-typeset .sieve-blog-chart > img {
+  display: block;
+  margin: 1.4rem auto;
+  max-width: 100%;
+  width: 100%;
+  height: auto;
+}
+
 /* Landing-page H1 (sentence-case wordmark substrate) — extra breathing
  * room below the page title before the lead paragraph. */
 .md-typeset > h1:first-child {
