@@ -49,20 +49,25 @@ The actual constraint isn't silicon. It's **advanced packaging** —
 specifically the chip-on-wafer-on-substrate (CoWoS) process at
 TSMC that bonds the GPU die to its high-bandwidth memory stack.
 CoWoS capacity has been the rate-limiting step for H100, H200, and
-B200 supply since 2023. [TSMC's own guidance][tsmc-cowos] is that
-capacity is being roughly doubled year-on-year through 2026, but
-"doubling" from a base that's still drastically short of demand
-doesn't close the gap; it slows the rate at which the gap grows.
+B200 supply since 2023. Industry trade press
+[reports TSMC scaling CoWoS capacity from roughly 35,000 to
+130,000 wafers per month between 2024 and the end of 2026][tsmc-cowos],
+with Nvidia booking the majority of the expanded capacity. That
+ramp is enormous in absolute terms but still narrows a demand-
+supply gap rather than closing it.
 
-This shows up in the capex numbers. Microsoft, Meta, Google, and
-Amazon collectively guided to **>$300 billion in 2025 capital
-expenditure**, with the majority going to AI infrastructure
-([Bloomberg coverage][bloomberg-capex],
-[Reuters][reuters-capex]).
-That's an investment rate large enough to reshape the global
-semiconductor industry, and analysts still expect demand to outrun
-supply through at least 2027 ([Morgan Stanley][ms-cowos],
-[Bain & Co][bain-genai-capex]).
+This shows up in the capex numbers. Microsoft alone reported
+**roughly $88 billion in FY25 capital expenditure**, with the
+[bulk going to AI infrastructure][msft-capex]; the equivalent
+figures from Amazon, Alphabet, and Meta put the four-firm
+aggregate in the $300 billion range for the year. That's an
+investment rate large enough to reshape the global semiconductor
+industry. Industry analysts nonetheless project AI compute
+demand outrunning supply through the late 2020s — [Bain's 2025
+Technology Report][bain-genai-capex] models global AI compute
+demand reaching 200 GW by 2030 and identifies a multi-hundred-
+billion-dollar annual funding shortfall against the build-out
+required to meet it.
 
 The point isn't that AI infrastructure is expensive. The point is
 that **compute is the binding constraint on the rate at which AI
@@ -538,9 +543,9 @@ right answer for your setup depends on whether your workload
 looks like a long agent loop — most of them do — and whether you
 want the proxy shape (no agent code changes) or a different one.
 
-The honest version of every claim in this post is in our
-[benchmark report][sieve-benchmark]. The methodology is in the
-[evaluation repo][sieve-eval]. The source is on
+Every Sieve-specific number in this post comes from the
+[benchmark suite][sieve-bench-tests] in our repo — reproducible on
+your own hardware via `sieve benchmark`. The source is on
 [GitHub][sieve-github]. Run it against your own agent. Measure
 your own numbers. Decide for yourself.
 
@@ -564,16 +569,13 @@ disclose all inputs in their captions. Provider prices were
 correct on 2026-06-09 and change frequently — substitute current
 rates for current estimates.*
 
-[tsmc-cowos]: https://pr.tsmc.com/english/news/3122
-[bloomberg-capex]: https://www.bloomberg.com/news/articles/2025-02-04/big-tech-s-ai-capex-spending-tops-300-billion
-[reuters-capex]: https://www.reuters.com/technology/artificial-intelligence/big-tech-ai-spending-soars-2025-2025-02-13/
-[ms-cowos]: https://www.morganstanley.com/ideas/ai-hardware-bottlenecks
-[bain-genai-capex]: https://www.bain.com/insights/topics/technology-report/
+[tsmc-cowos]: https://www.digitimes.com/news/a20251210PD218/tsmc-cowos-capacity-nvidia-equipment.html
+[msft-capex]: https://www.microsoft.com/en-us/investor/events/fy-2025/earnings-fy-2025-q4
+[bain-genai-capex]: https://www.bain.com/insights/how-can-we-meet-ais-insatiable-demand-for-compute-power-technology-report-2025/
 [attention-paper]: https://arxiv.org/abs/1706.03762
 [openai-latency]: https://platform.openai.com/docs/guides/latency-optimization
 [nvidia-throughput]: https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/
 [sieve-readme]: https://github.com/llmsieve/llm-sieve#performance
 [jevons]: https://en.wikipedia.org/wiki/Jevons_paradox
 [sieve-github]: https://github.com/llmsieve/llm-sieve
-[sieve-benchmark]: https://github.com/llmsieve/llm-sieve/blob/main/benchmarks/REPORT.md
-[sieve-eval]: https://github.com/llmsieve/llm-sieve/tree/main/tests
+[sieve-bench-tests]: https://github.com/llmsieve/llm-sieve/tree/main/tests
