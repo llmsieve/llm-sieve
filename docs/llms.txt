@@ -1,0 +1,33 @@
+# Sieve
+
+> Sieve is a transparent proxy that sits between an agent framework and an
+> LLM endpoint (OpenAI-compatible or Ollama). It strips tool schemas,
+> repeated instructions, and stale history from every outbound turn,
+> rewrites the prompt into a lean payload, and backs retrieval with an
+> encrypted local memory store. The agent and the endpoint are unchanged;
+> the proxy does the reduction. Zero telemetry, local-first, Apache 2.0.
+
+Key facts: install with `pipx install llm-sieve`, then `sieve-install`
+for a guided setup. The proxy exposes `/api/chat` (Ollama style) and
+`/v1/chat/completions` (OpenAI style). User data lives in an encrypted
+SQLite store under `~/.sieve/` and survives package upgrades.
+
+## Docs
+
+- [Getting started](https://llmsieve.dev/getting-started/): blank terminal to working proxy in about a minute
+- [Installation](https://llmsieve.dev/installation/): pipx, pip, and from-source paths; platform notes; upgrades
+- [Configuration](https://llmsieve.dev/configuration/): the single YAML config file and every key it accepts
+- [CLI reference](https://llmsieve.dev/cli-reference/): every command, flag, and option
+- [Diagnostic headers](https://llmsieve.dev/diagnostic-headers/): response headers for operational visibility
+- [Changelog](https://llmsieve.dev/changelog/): release history (Keep a Changelog, SemVer)
+
+## Blog
+
+- [Why Sieve](https://llmsieve.dev/blog/2026/06/09/why-sieve/): proxy vs library vs compaction — the architectural trade-off
+- [The hidden cost of context](https://llmsieve.dev/blog/2026/06/10/the-hidden-cost-of-context/): why agent token bills grow faster than expected
+- [Compute is the bottleneck](https://llmsieve.dev/blog/2026/06/09/compute-is-the-bottleneck-tokens-are-just-the-price-tag/): the compute economics behind token pricing
+
+## Source
+
+- [GitHub repository](https://github.com/llmsieve/llm-sieve): Apache 2.0, issues and contributions welcome
+- [PyPI package](https://pypi.org/project/llm-sieve/): `pip install llm-sieve`

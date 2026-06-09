@@ -30,4 +30,47 @@
   <meta name="twitter:title" content="{{ og_title }}">
   <meta name="twitter:description" content="{{ og_description }}">
   <meta name="twitter:image" content="{{ og_image }}">
+  {#- JSON-LD: BlogPosting on posts, SoftwareApplication on the homepage. #}
+  {%- if page.meta and page.meta.date %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": {{ page.title | tojson }},
+    "description": {{ og_description | tojson }},
+    "image": {{ og_image | tojson }},
+    "datePublished": "{{ page.meta.date.isoformat() if page.meta.date.isoformat is defined else page.meta.date }}",
+    "url": {{ page.canonical_url | tojson }},
+    "mainEntityOfPage": {{ page.canonical_url | tojson }},
+    "author": {
+      "@type": "Organization",
+      "name": "Sieve Engineering",
+      "url": "{{ config.site_url.rstrip("/") }}/blog/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "Sieve",
+      "url": {{ config.site_url | tojson }},
+      "logo": {
+        "@type": "ImageObject",
+        "url": "{{ config.site_url.rstrip("/") }}/assets/sieve-icon.svg"
+      }
+    }
+  }
+  </script>
+  {%- elif page.is_homepage %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Sieve",
+    "description": {{ og_description | tojson }},
+    "url": {{ config.site_url | tojson }},
+    "applicationCategory": "DeveloperApplication",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "softwareHelp": "{{ config.site_url.rstrip("/") }}/getting-started/",
+    "sameAs": [{{ config.repo_url | tojson }}, "https://pypi.org/project/llm-sieve/"]
+  }
+  </script>
+  {%- endif %}
 {% endblock %}
