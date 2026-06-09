@@ -1,8 +1,7 @@
 ---
 description: >
   Reference for Sieve's single YAML config file — where it lives,
-  the keys it accepts, and how to override the path per run with
-  --config or SIEVE_CONFIG.
+  the keys it accepts, and how to override the path per run.
 ---
 
 # Configuration

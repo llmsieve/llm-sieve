@@ -1,7 +1,7 @@
 ---
 description: >
   Writing from the Sieve team on agent infrastructure, LLM context
-  management, token economics, and the design decisions behind Sieve.
+  management, token economics, and Sieve design decisions.
 ---
 
 # Blog

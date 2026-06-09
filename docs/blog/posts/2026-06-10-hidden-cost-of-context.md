@@ -6,8 +6,7 @@ categories:
   - Engineering
 description: >
   Why LLM agent token bills grow faster than developers expect — and
-  what the relationship between context windows, tokens, and compute
-  actually looks like at scale.
+  what context actually costs in compute at scale.
 image: https://llmsieve.dev/assets/social/social-card-hidden-cost-of-context.png
 ---
 

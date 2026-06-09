@@ -1,8 +1,7 @@
 ---
 description: >
   From a blank terminal to a working Sieve proxy in about a minute —
-  install, guided setup, and a live demo of transparent context
-  reduction for your LLM.
+  install, guided setup, and a live context-reduction demo.
 ---
 
 # Getting started

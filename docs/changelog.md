@@ -1,7 +1,7 @@
 ---
 description: >
   Release history for Sieve — every version, change, and fix,
-  following the Keep a Changelog format and Semantic Versioning.
+  following Keep a Changelog and Semantic Versioning.
 ---
 
 # Changelog

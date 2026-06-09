@@ -1,8 +1,7 @@
 ---
 description: >
   Complete reference for the Sieve CLI — every command, flag, and
-  option, with cross-links to the guided walkthrough and the
-  configuration key detail.
+  option, with links to the walkthrough and config detail.
 ---
 
 # CLI reference
