@@ -1,3 +1,10 @@
+---
+description: >
+  From a blank terminal to a working Sieve proxy in about a minute —
+  install, guided setup, and a live demo of transparent context
+  reduction for your LLM.
+---
+
 # Getting started
 
 A blank terminal to a working Sieve proxy in about a minute. The main path assumes you have Python, an LLM endpoint, and a terminal. If any of that isn't true yet, expand the green boxes as they come up — they cover the prerequisites.

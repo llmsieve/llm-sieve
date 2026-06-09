@@ -8,6 +8,7 @@ description: >
   Compute is the binding constraint on AI. Tokens are how that
   constraint is repriced and passed to you. Workload shape is the
   one lever you fully control.
+image: https://llmsieve.dev/assets/social/social-card-compute-bottleneck.png
 ---
 
 # Compute is the bottleneck. Tokens are just the price tag.

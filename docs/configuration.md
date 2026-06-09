@@ -1,3 +1,10 @@
+---
+description: >
+  Reference for Sieve's single YAML config file — where it lives,
+  the keys it accepts, and how to override the path per run with
+  --config or SIEVE_CONFIG.
+---
+
 # Configuration
 
 Sieve reads its configuration from a single YAML file. After `sieve-install`, that file lives at `~/.sieve/sieve.yaml`. You can override the path with `sieve start --config <path>` or by setting `SIEVE_CONFIG`.

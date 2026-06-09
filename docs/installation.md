@@ -1,3 +1,10 @@
+---
+description: >
+  Every supported way to install the Sieve proxy — pipx, pip, or from
+  source — with platform notes, upgrade commands, and how to wire it
+  to your LLM endpoint.
+---
+
 # Installation
 
 Every supported install path, platform notes, and how to wire Sieve to your LLM.

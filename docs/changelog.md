@@ -1,3 +1,9 @@
+---
+description: >
+  Release history for Sieve — every version, change, and fix,
+  following the Keep a Changelog format and Semantic Versioning.
+---
+
 # Changelog
 
 The full release history lives in [`CHANGELOG.md`](https://github.com/llmsieve/llm-sieve/blob/main/CHANGELOG.md)

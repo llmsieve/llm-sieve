@@ -1,3 +1,10 @@
+---
+description: >
+  Complete reference for the Sieve CLI — every command, flag, and
+  option, with cross-links to the guided walkthrough and the
+  configuration key detail.
+---
+
 # CLI reference
 
 Every Sieve command, flag, and option. For a guided walkthrough see [Getting started](getting-started.md); for config-key detail see [Configuration](configuration.md).

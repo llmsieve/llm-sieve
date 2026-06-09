@@ -1,4 +1,8 @@
 ---
+description: >
+  Sieve is a transparent proxy that cuts LLM token usage by stripping
+  repeated context from agent traffic, backed by an encrypted local
+  memory store.
 hide:
   - navigation
   - toc

@@ -1,3 +1,10 @@
+---
+description: >
+  The diagnostic response headers Sieve attaches to intercepted chat
+  requests — stable across releases, safe to build scripts and
+  monitoring on.
+---
+
 # Diagnostic response headers
 
 Sieve attaches a small set of response headers on intercepted `/api/chat`

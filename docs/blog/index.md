@@ -1,3 +1,9 @@
+---
+description: >
+  Writing from the Sieve team on agent infrastructure, LLM context
+  management, token economics, and the design decisions behind Sieve.
+---
+
 # Blog
 
 Writings from the Sieve team about agent infrastructure, LLM context
