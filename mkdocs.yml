@@ -58,9 +58,16 @@ plugins:
       categories: false     # skip category index pages until we have enough posts to warrant them
       authors_file: blog/.authors.yml
   - rss:
-      # RSS feed at /feed.xml — useful for technical readers who
+      # RSS feed at /feed_rss_*.xml — useful for technical readers who
       # track blogs that way. Configured for the blog/ subtree only.
       match_path: "blog/posts/.*"
+      # use_git: false makes the plugin read dates from the post
+      # front-matter (date: field in each post's YAML header) instead
+      # of from git log. This is required when building in shallow-
+      # clone CI environments like Cloudflare Pages, where git history
+      # isn't available and the plugin's git-walk would crash with
+      # IndexError. Our posts all have explicit `date:` front-matter.
+      use_git: false
       date_from_meta:
         as_creation: date
       categories:
