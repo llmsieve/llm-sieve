@@ -43,6 +43,30 @@ theme:
 extra_css:
   - stylesheets/custom.css
 
+plugins:
+  # When `plugins:` is present, the default `search` plugin is no longer
+  # implicit — list it explicitly so search keeps working.
+  - search
+  - blog:
+      blog_dir: blog
+      blog_toc: true
+      post_url_format: "{date}/{slug}"
+      post_date_format: long
+      post_excerpt: required
+      post_readtime: true
+      archive: false        # no per-year archive pages until we have enough posts
+      categories: false     # skip category index pages until we have enough posts to warrant them
+      authors_file: blog/.authors.yml
+  - rss:
+      # RSS feed at /feed.xml — useful for technical readers who
+      # track blogs that way. Configured for the blog/ subtree only.
+      match_path: "blog/posts/.*"
+      date_from_meta:
+        as_creation: date
+      categories:
+        - categories
+      pretty_print: true
+
 nav:
   - Home: index.md
   - Getting started: getting-started.md
@@ -51,6 +75,8 @@ nav:
   - CLI reference: cli-reference.md
   - Diagnostic headers: diagnostic-headers.md
   - Changelog: changelog.md
+  - Blog:
+      - blog/index.md
 
 markdown_extensions:
   - admonition

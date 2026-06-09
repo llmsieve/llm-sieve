@@ -1,0 +1,5 @@
+authors:
+  sieve-engineering:
+    name: Sieve Engineering
+    description: Writings about agent infrastructure, LLM context, and the design of Sieve
+    avatar: ../assets/sieve-icon.svg
